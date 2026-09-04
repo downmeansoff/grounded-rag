@@ -13,6 +13,7 @@ if sys.stdout.encoding != "utf-8":
 
 from grounded_rag.config import settings
 from grounded_rag.embed.local import LocalEmbedder
+from grounded_rag.retrieve import retrieve
 from grounded_rag.store import postgres as store
 
 
@@ -21,14 +22,15 @@ def main(query: str, k: int = 5) -> None:
     conn = store.connect(settings.dsn)
 
     query_vec = embedder.embed_query(query)
-    hits = store.search_hybrid(conn, query_vec, query, k=k)
+    hits = retrieve(conn, query_vec, query, k=k)
 
     if not hits:
         print("Ничего не найдено.")
         return
 
     for i, hit in enumerate(hits, 1):
-        print(f"\n[{i}] distance={hit.distance:.4f} reg={hit.reg_number} attachment={hit.attachment_name}#{hit.chunk_index}")
+        score = "" if hit.rerank_score is None else f" rerank={hit.rerank_score:.4f}"
+        print(f"\n[{i}] distance={hit.distance:.4f}{score} reg={hit.reg_number} attachment={hit.attachment_name}#{hit.chunk_index}")
         print(f"    {hit.title}")
         snippet = hit.text.strip().replace("\n", " ")
         print(f"    {snippet[:300]}")

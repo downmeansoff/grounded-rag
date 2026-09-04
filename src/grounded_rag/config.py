@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     embedding_model: str = "intfloat/multilingual-e5-base"
     embedding_dim: int = 768
 
+    # Rerank выключен по умолчанию: он тянет вторую модель в память рядом
+    # с эмбеддером и заметно замедляет ответ. Включать осознанно.
+    use_rerank: bool = False
+    rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_candidates: int = 30
+
     gigachat_credentials: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-2"

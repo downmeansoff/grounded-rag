@@ -14,6 +14,7 @@ if sys.stdout.encoding != "utf-8":
 from grounded_rag.config import settings
 from grounded_rag.embed.local import LocalEmbedder
 from grounded_rag.generate.gigachat_llm import answer
+from grounded_rag.retrieve import retrieve
 from grounded_rag.store import postgres as store
 
 
@@ -22,7 +23,7 @@ def main(query: str, k: int = 5) -> None:
     conn = store.connect(settings.dsn)
 
     query_vec = embedder.embed_query(query)
-    hits = store.search_hybrid(conn, query_vec, query, k=k)
+    hits = retrieve(conn, query_vec, query, k=k)
     conn.close()
 
     if not hits:

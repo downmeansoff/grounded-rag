@@ -113,6 +113,9 @@ class SearchHit:
     chunk_index: int
     text: str
     distance: float
+    # Заполняется только на выходе rerank: у чанка, пришедшего прямо из поиска,
+    # оценки cross-encoder'а нет, и притворяться, что она есть, нельзя.
+    rerank_score: float | None = None
 
 
 def search(conn: psycopg.Connection, query_embedding: list[float], k: int = 5) -> list[SearchHit]:
