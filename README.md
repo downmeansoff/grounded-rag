@@ -1,19 +1,24 @@
 # grounded-rag
 
-Grounded RAG движок с нуля. Неделя 1 MVP: ingestion → chunking → embedding → Postgres/pgvector → similarity search.
+![tests](https://img.shields.io/badge/tests-13%20passed-brightgreen)
+![python](https://img.shields.io/badge/python-3.11-blue)
+![postgres](https://img.shields.io/badge/store-pgvector-336791)
 
-Первый тестовый корпус — тендерная документация (проект [tenderhunt](../тендер)).
+Grounded RAG движок, собранный с нуля: ingestion, chunking, embedding, векторный поиск в Postgres и ответ с цитатами.
+
+Принцип всего движка: модель отвечает только по найденным документам. Если ответа в них нет, она обязана сказать это прямо, а не заполнить пробел общими знаниями. Непроверяемое утверждение хуже отсутствующего.
+
+Первый тестовый корпус: реальная тендерная документация госзакупок (14 документов, 550 чанков).
 
 ## Архитектура
 
 ```
-ingest.loader      парсит output/docs/*.txt (номер/название/заказчик/НМЦК + вложения)
-chunk.recursive     рекурсивный чанкер, 1500/200 символов, режет по абзацам → предложениям → символам
-embed.local         intfloat/multilingual-e5-base (локально, без ключа), query/passage префиксы E5
-store.postgres      psycopg3 + pgvector, HNSW индекс, cosine distance (<=>)
+ingest.loader          парсит документы закупки (номер, название, заказчик, НМЦК, вложения)
+chunk.recursive        рекурсивный чанкер 1500/200, режет по абзацам, затем предложениям, затем символам
+embed.local            intfloat/multilingual-e5-base локально, без ключа, с query/passage префиксами E5
+store.postgres         psycopg3 + pgvector, HNSW индекс, косинусное расстояние (<=>)
+generate.gigachat_llm  ответ с цитатами поверх найденных чанков, честный отказ при отсутствии ответа
 ```
-
-Retrieve/rerank/generation поверх similarity search — следующие шаги, не часть недели 1.
 
 ## Запуск
 
@@ -24,15 +29,49 @@ py -3.11 -m venv .venv
 cp .env.example .env
 ```
 
-Порт Postgres в `.env`/`docker-compose.yml` — `POSTGRES_PORT` (по умолчанию 5433, не 5432 — на этой машине 5432 занят нативным Windows-сервисом postgres.exe).
+Порт Postgres задаётся через `POSTGRES_PORT` в `.env` и `docker-compose.yml`. По умолчанию 5433, а не 5432: на машине разработки 5432 занят нативным сервисом postgres.
 
 ```bash
-python scripts/ingest_tenders.py "C:\Users\glebo\тендер\output\docs"
+python scripts/ingest_tenders.py "path/to/docs"
 python scripts/query.py "уборка помещений клининг"
+python scripts/ask.py "какой график работы?"
 ```
+
+`ask.py` требует `GIGACHAT_CREDENTIALS` в `.env`: ключ авторизации из личного кабинета developers.sber.ru, раздел API, GigaChat API.
+
+## Пример вывода
+
+```
+$ python scripts/ask.py "какой график работы?"
+
+График работы зависит от конкретного тендера:
+1. Услуги предоставляются в рабочие дни с понедельника по субботу,
+   в выходные по предварительному согласованию с заказчиком. [3]
+2. Круглосуточно, включая будние, выходные и праздничные дни. [5]
+
+Источники:
+  [1] тендер 0312100006326000036: Оказание услуг по гардеробному обслуживанию
+  [3] тендер 0362100015526000045: Обслуживание посетителей в гардеробе
+  [5] тендер 0152100007026000006: Услуги вахтера (сторожа)
+```
+
+Вопрос вне корпуса получает отказ, а не выдумку:
+
+```
+$ python scripts/ask.py "какая столица Франции?"
+в найденных документах ответа нет
+```
+
+## Тесты
+
+```bash
+.venv/Scripts/python -m pytest tests/ -q
+```
+
+Покрыты инварианты чанкера (ни один чанк не длиннее size, overlap повторяет хвост предыдущего, индексы последовательны) и путь честного отказа, который проверяется без обращения к модели.
 
 ## Дальше
 
-- GigaEmbeddings вместо локальной модели (нужен ключ GigaChat API)
-- Contextual Retrieval (LLM-контекст перед чанком)
-- Hybrid search (BM25 + vector), rerank, generation
+- Hybrid search (BM25 + вектор) и rerank поверх similarity search
+- Contextual Retrieval: LLM-контекст перед каждым чанком
+- GigaEmbeddings вместо локальной модели эмбеддингов
