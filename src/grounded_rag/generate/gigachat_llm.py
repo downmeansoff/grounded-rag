@@ -8,9 +8,7 @@
 
 from __future__ import annotations
 
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
-
+from grounded_rag.llm import GigaChatModel
 from grounded_rag.store.postgres import SearchHit
 
 SYSTEM_PROMPT = (
@@ -36,13 +34,5 @@ def answer(query: str, hits: list[SearchHit], credentials: str, scope: str, mode
 
     user_prompt = f"Вопрос: {query}\n\nДокументы:\n{_build_context(hits)}"
 
-    with GigaChat(credentials=credentials, scope=scope, model=model, verify_ssl_certs=False) as client:
-        request = Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=SYSTEM_PROMPT),
-                Messages(role=MessagesRole.USER, content=user_prompt),
-            ],
-            temperature=0.2,
-        )
-        response = client.chat(request)
-        return response.choices[0].message.content
+    with GigaChatModel(credentials, scope, model) as client:
+        return client.complete(SYSTEM_PROMPT, user_prompt)

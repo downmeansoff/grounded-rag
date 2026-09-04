@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     rerank_model: str = "BAAI/bge-reranker-base"
     rerank_candidates: int = 30
 
+    # Contextual Retrieval: вызов LLM на каждый чанк при ingest. Выключен по
+    # умолчанию, потому что это единственная часть индексации, которая тратит
+    # платный ресурс. Результат кэшируется на диск, повторный ingest бесплатный.
+    use_contextual: bool = False
+    contextual_cache_path: str = ".cache/contexts.json"
+    contextual_head_chars: int = 1200
+
     gigachat_credentials: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-2"

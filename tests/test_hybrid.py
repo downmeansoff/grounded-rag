@@ -124,6 +124,39 @@ def test_hybrid_works_when_fulltext_matches_nothing(conn):
     assert hits[0].reg_number == "1000000000000000005"
 
 
+def test_generated_context_is_searchable_but_stays_out_of_the_citation(conn):
+    # Contextual Retrieval со стороны базы. Слова «гардеробное обслуживание» нет
+    # в тексте ни одного из чанков, оно есть только в сгенерированном контексте
+    # второго. Первый при этом ближе по вектору, то есть без context в tsvector
+    # он бы и остался наверху.
+    store.upsert_document(
+        conn,
+        TenderDoc(
+            reg_number="1000000000000000007",
+            title="Тендер 1000000000000000007",
+            customer="Заказчик",
+            price="100000",
+            source_path="/tmp/1000000000000000007",
+            attachments=[],
+        ),
+    )
+    store.insert_chunk(
+        conn, "1000000000000000007", "Контракт", 0,
+        "Общие положения и порядок расчётов.", _axis(0),
+    )
+    store.insert_chunk(
+        conn, "1000000000000000007", "Контракт", 1,
+        "Оплата производится в течение 15 рабочих дней с даты подписания акта.", _axis(1),
+        context="Фрагмент описывает порядок расчётов по контракту на гардеробное обслуживание.",
+    )
+
+    hits = store.search_hybrid(conn, _axis(0), "гардеробное обслуживание", k=2)
+
+    assert hits[0].chunk_index == 1
+    # Контекст влияет на поиск, но в цитату уходит документ, а не пересказ.
+    assert "гардероб" not in hits[0].text
+
+
 def test_distance_stays_real_cosine_distance(conn):
     _seed(conn, "1000000000000000006", [("Оказание услуг вахтера.", _axis(0))])
     hit = store.search_hybrid(conn, _axis(0), "оказание услуг", k=1)[0]

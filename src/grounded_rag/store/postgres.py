@@ -32,6 +32,7 @@ def ensure_schema(conn: psycopg.Connection, dim: int) -> None:
             attachment_name TEXT,
             chunk_index INT,
             text TEXT,
+            context TEXT,
             embedding vector({dim})
         )
     """)
@@ -39,6 +40,9 @@ def ensure_schema(conn: psycopg.Connection, dim: int) -> None:
         "CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw "
         "ON chunks USING hnsw (embedding vector_cosine_ops)"
     )
+    # Миграция для баз, залитых до Contextual Retrieval: колонка добавляется
+    # пустой, старые чанки просто остаются без контекста.
+    conn.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS context TEXT")
     ensure_fulltext(conn)
 
 
@@ -52,6 +56,11 @@ def ensure_fulltext(conn: psycopg.Connection) -> None:
     закупки внутри текста чанка обычно не встречается, он живёт в метаданных,
     и без них запрос «0312100006326000036» не находит вообще ничего.
 
+    Туда же идёт context: сгенерированное описание места чанка в документе
+    приносит слова, которых в самом фрагменте нет («гардероб», «штрафы»,
+    «порядок оплаты»), и полнотекст начинает находить его по ним. В оригинальной
+    статье про Contextual Retrieval это называется contextual BM25.
+
     Конфигурация 'russian' задана явно: двухаргументный to_tsvector IMMUTABLE,
     поэтому колонку можно объявить GENERATED и не поддерживать руками.
     """
@@ -62,6 +71,7 @@ def ensure_fulltext(conn: psycopg.Connection) -> None:
                 'russian',
                 coalesce(reg_number, '') || ' '
                 || coalesce(attachment_name, '') || ' '
+                || coalesce(context, '') || ' '
                 || coalesce(text, '')
             )
         ) STORED
@@ -95,13 +105,20 @@ def insert_chunk(
     chunk_index: int,
     text: str,
     embedding: list[float],
+    context: str = "",
 ) -> None:
+    """text хранится оригинальным всегда.
+
+    Контекст влияет на то, как чанк ищется (эмбеддинг считается по склейке,
+    tsv включает context), но не на то, что попадает в цитату: пользователю
+    показывается документ, а не пересказ документа моделью.
+    """
     conn.execute(
         """
-        INSERT INTO chunks (reg_number, attachment_name, chunk_index, text, embedding)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO chunks (reg_number, attachment_name, chunk_index, text, context, embedding)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
-        (reg_number, attachment_name, chunk_index, text, embedding),
+        (reg_number, attachment_name, chunk_index, text, context, embedding),
     )
 
 
