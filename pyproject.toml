@@ -1,0 +1,26 @@
+[project]
+name = "grounded-rag"
+version = "0.1.0"
+description = "Postgres-native grounded RAG engine — tender corpus first, legal second."
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3.6",
+    "sentence-transformers>=3.3",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "tqdm>=4.67",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
