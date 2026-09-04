@@ -105,6 +105,12 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
                 f"Не удалось получить контекст для чанков: {contextualizer.failures}. "
                 "Они проиндексированы без него, повторный прогон доберёт их."
             )
+        if contextualizer.exhausted:
+            print(
+                f"Тариф GigaChat исчерпан, оставшиеся чанки пропущены: {contextualizer.skipped}. "
+                "Уже полученные контексты лежат в кэше, прогон после пополнения "
+                "продолжит с места обрыва и не заплатит за них второй раз."
+            )
 
 
 if __name__ == "__main__":

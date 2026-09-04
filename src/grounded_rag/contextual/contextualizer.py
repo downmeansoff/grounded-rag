@@ -25,7 +25,7 @@ from pathlib import Path
 
 from grounded_rag.contextual.cache import ContextCache, cache_key
 from grounded_rag.ingest.loader import TenderDoc
-from grounded_rag.llm import ChatModel
+from grounded_rag.llm import ChatModel, QuotaExhausted
 
 # Версия промпта входит в ключ кэша: правка формулировки обесценивает старые
 # контексты, и подставлять их к новому промпту было бы враньём.
@@ -68,11 +68,17 @@ class Contextualizer:
         self.model = model
         self.head_chars = head_chars
         self.cache = ContextCache(cache_path) if cache_path else None
-        # Вызовы, которые не прошли: лимит тарифа, сеть, отказ модели. Чанк при
-        # этом всё равно индексируется, просто без контекста, а счётчик даёт
-        # прогону честно сказать, какая часть корпуса осталась необогащённой.
+        # Вызовы, которые не прошли: сеть, отказ модели. Чанк при этом всё равно
+        # индексируется, просто без контекста, а счётчик даёт прогону честно
+        # сказать, какая часть корпуса осталась необогащённой.
         self.failures = 0
         self.calls = 0
+        # Кончившийся тариф отличается от сетевого сбоя тем, что следующий вызов
+        # обречён так же, как этот. Поэтому после первого такого отказа модель
+        # больше не дёргается, а оставшиеся чанки считаются пропущенными: пятьсот
+        # обречённых запросов подряд стоят минут и не приносят ни одного контекста.
+        self.exhausted = False
+        self.skipped = 0
 
     def _prompt(self, doc: TenderDoc, attachment_name: str, text: str) -> str:
         return (
@@ -99,9 +105,17 @@ class Contextualizer:
             if cached is not None:
                 return cached
 
+        if self.exhausted:
+            self.skipped += 1
+            return ""
+
         try:
             context = self.model.complete(SYSTEM_PROMPT, self._prompt(doc, attachment_name, text)).strip()
             self.calls += 1
+        except QuotaExhausted:
+            self.exhausted = True
+            self.skipped += 1
+            return ""
         except Exception:
             # Обрыв на середине корпуса не должен стоить всего прогона: чанк
             # уходит в индекс без контекста, остальные продолжают обогащаться.

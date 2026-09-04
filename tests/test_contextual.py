@@ -12,6 +12,7 @@ import json
 from grounded_rag.contextual.cache import ContextCache, cache_key
 from grounded_rag.contextual.contextualizer import Contextualizer, enrich
 from grounded_rag.ingest.loader import Attachment, TenderDoc
+from grounded_rag.llm import QuotaExhausted
 
 DOC = TenderDoc(
     reg_number="0312100006326000036",
@@ -163,3 +164,46 @@ def test_contexts_for_keeps_order_aligned_with_chunks():
         DOC, "Описание объекта закупки", ["первый", "второй", "третий"]
     )
     assert contexts == ["контекст 1", "контекст 2", "контекст 3"]
+
+
+class QuotaModel:
+    """Тариф кончился: первый же вызов отдаёт QuotaExhausted."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, system: str, user: str) -> str:
+        self.calls += 1
+        raise QuotaExhausted("402 Payment Required")
+
+
+def test_exhausted_quota_stops_calling_model():
+    # Разница с обычным сбоем: следующий вызов обречён так же, как этот.
+    # Пятьсот обречённых запросов подряд стоят минут и не дают ни одного контекста.
+    model = QuotaModel()
+    contextualizer = Contextualizer(model)
+
+    contexts = contextualizer.contexts_for(
+        DOC, "Описание объекта закупки", ["первый", "второй", "третий"]
+    )
+
+    assert contexts == ["", "", ""]
+    assert model.calls == 1
+    assert contextualizer.exhausted is True
+    assert contextualizer.skipped == 3
+    # Кончившийся тариф - не сбой генерации, и в счётчик сбоев он не идёт:
+    # иначе отчёт прогона перестал бы различать «сеть моргнула» и «денег нет».
+    assert contextualizer.failures == 0
+
+
+def test_cache_still_works_after_quota_ran_out(tmp_path):
+    # Оплаченное до обрыва должно доехать до индекса: иначе прогон, упавший на
+    # лимите, обесценивал бы всё, за что уже заплатили.
+    path = tmp_path / "contexts.json"
+    Contextualizer(FakeModel(), cache_path=path).context_for(DOC, "Описание объекта закупки", CHUNK)
+
+    after = Contextualizer(QuotaModel(), cache_path=path)
+    after.exhausted = True
+
+    assert after.context_for(DOC, "Описание объекта закупки", CHUNK) == "Раздел про порядок оплаты."
+    assert after.skipped == 0
