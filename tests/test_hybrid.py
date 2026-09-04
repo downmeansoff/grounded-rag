@@ -15,6 +15,7 @@ import psycopg
 import pytest
 
 from grounded_rag.config import settings
+from grounded_rag.errors import DimensionMismatch
 from grounded_rag.ingest.loader import TenderDoc
 from grounded_rag.store import postgres as store
 
@@ -161,3 +162,14 @@ def test_distance_stays_real_cosine_distance(conn):
     _seed(conn, "1000000000000000006", [("Оказание услуг вахтера.", _axis(0))])
     hit = store.search_hybrid(conn, _axis(0), "оказание услуг", k=1)[0]
     assert hit.distance == pytest.approx(0.0, abs=1e-6)
+
+
+def test_schema_refuses_an_embedder_of_another_dimension(conn):
+    # Смена бэкенда эмбеддингов на уже собранном индексе. CREATE TABLE IF NOT
+    # EXISTS готовую таблицу не трогает, поэтому без этой проверки ingest
+    # доходил бы до вставки первого чанка и падал там ошибкой про длину
+    # вектора, из которой не видно ни причины, ни что делать дальше.
+    assert store.chunks_dim(conn) == DIM
+
+    with pytest.raises(DimensionMismatch):
+        store.ensure_schema(conn, DIM + 256)

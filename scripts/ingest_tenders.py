@@ -22,7 +22,7 @@ from tqdm import tqdm
 from grounded_rag.chunk.recursive import chunk_text
 from grounded_rag.config import settings
 from grounded_rag.contextual.contextualizer import Contextualizer, enrich
-from grounded_rag.embed.local import LocalEmbedder
+from grounded_rag.embed.factory import make_embedder
 from grounded_rag.ingest.loader import load_corpus
 from grounded_rag.llm import GigaChatModel
 from grounded_rag.store import postgres as store
@@ -53,7 +53,7 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
         docs = [doc for doc in docs if doc.reg_number in only]
     print(f"Загружено документов: {len(docs)}")
 
-    embedder = LocalEmbedder(settings.embedding_model, settings.embedding_dim)
+    embedder = make_embedder(settings)
     contextualizer = build_contextualizer()
     if contextualizer is not None:
         cached = len(contextualizer.cache) if contextualizer.cache else 0

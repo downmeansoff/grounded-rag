@@ -31,7 +31,8 @@ if sys.stdout.encoding != "utf-8":
 sys.path.insert(0, str(Path(__file__).parent))
 
 from grounded_rag.config import settings
-from grounded_rag.embed.local import LocalEmbedder
+from grounded_rag.embed.base import Embedder
+from grounded_rag.embed.factory import make_embedder
 from grounded_rag.store import postgres as store
 
 import ingest_tenders
@@ -39,7 +40,7 @@ import ingest_tenders
 K = 5
 
 
-def run_queries(embedder: LocalEmbedder, queries: list[str], reg_number: str) -> dict[str, list[str]]:
+def run_queries(embedder: Embedder, queries: list[str], reg_number: str) -> dict[str, list[str]]:
     conn = store.connect(settings.dsn)
     results = {}
     for query in queries:
@@ -54,7 +55,7 @@ def run_queries(embedder: LocalEmbedder, queries: list[str], reg_number: str) ->
 
 
 def main(docs_dir: Path, reg_number: str, queries: list[str], whole_corpus: bool = False) -> None:
-    embedder = LocalEmbedder(settings.embedding_model, settings.embedding_dim)
+    embedder = make_embedder(settings)
     only = None if whole_corpus else [reg_number]
 
     settings.use_contextual = False

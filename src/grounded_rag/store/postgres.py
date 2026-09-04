@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import psycopg
 from pgvector.psycopg import register_vector
 
+from grounded_rag.errors import DimensionMismatch
 from grounded_rag.ingest.loader import TenderDoc
 
 
@@ -15,7 +16,31 @@ def connect(dsn: str) -> psycopg.Connection:
     return conn
 
 
+def chunks_dim(conn: psycopg.Connection) -> int | None:
+    """Размерность вектора в уже существующей таблице, None если её нет.
+
+    pgvector держит размерность в atttypmod колонки, и это единственный способ
+    узнать её, не пытаясь вставить вектор.
+    """
+    row = conn.execute("""
+        SELECT atttypmod FROM pg_attribute
+        WHERE attrelid = to_regclass('chunks') AND attname = 'embedding'
+    """).fetchone()
+    return row[0] if row else None
+
+
 def ensure_schema(conn: psycopg.Connection, dim: int) -> None:
+    # CREATE TABLE IF NOT EXISTS готовую таблицу не трогает, поэтому смена
+    # бэкенда эмбеддингов на собранном индексе иначе прошла бы молча, а упала
+    # бы на вставке первого чанка ошибкой про несовпадение размерности вектора,
+    # из которой не видно ни причины, ни что делать.
+    existing = chunks_dim(conn)
+    if existing is not None and existing != dim:
+        raise DimensionMismatch(
+            f"индекс собран под векторы длины {existing}, а модель даёт {dim}. "
+            f"Размерность колонки задаётся при создании таблицы: чтобы сменить "
+            f"бэкенд эмбеддингов, удалите таблицу chunks и запустите ingest заново"
+        )
     conn.execute("""
         CREATE TABLE IF NOT EXISTS documents (
             reg_number TEXT PRIMARY KEY,

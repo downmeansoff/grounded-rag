@@ -12,13 +12,13 @@ if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from grounded_rag.config import settings
-from grounded_rag.embed.local import LocalEmbedder
+from grounded_rag.embed.factory import make_embedder
 from grounded_rag.retrieve import retrieve
 from grounded_rag.store import postgres as store
 
 
 def main(query: str, k: int = 5) -> None:
-    embedder = LocalEmbedder(settings.embedding_model, settings.embedding_dim)
+    embedder = make_embedder(settings)
     conn = store.connect(settings.dsn)
 
     query_vec = embedder.embed_query(query)

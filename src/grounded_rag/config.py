@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     postgres_user: str = "grounded_rag"
     postgres_password: str = "grounded_rag"
 
+    # Бэкенд эмбеддингов: local (sentence-transformers, офлайн и бесплатно)
+    # или gigachat (сеть и платный тариф). Размерность у моделей разная, а
+    # колонка в базе заводится под конкретное число, поэтому смена бэкенда
+    # означает пересбор индекса, а не только правку этих двух строк.
+    embedding_backend: str = "local"
     embedding_model: str = "intfloat/multilingual-e5-base"
     embedding_dim: int = 768
 
@@ -29,6 +34,8 @@ class Settings(BaseSettings):
     gigachat_credentials: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-2"
+    gigachat_embedding_model: str = "Embeddings"
+    gigachat_embedding_batch: int = 32
 
     @property
     def dsn(self) -> str:
