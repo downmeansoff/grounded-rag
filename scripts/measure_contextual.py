@@ -10,9 +10,14 @@
 прогон достаёт их оттуда. Первый раз за них платит обычный ingest.
 
 Использование:
-    python scripts/measure_contextual.py <путь_к_output/docs> <номер закупки> "запрос" ["запрос" ...]
+    python scripts/measure_contextual.py [--all] <путь_к_output/docs> <номер закупки> "запрос" ["запрос" ...]
 
-После прогона тендер остаётся проиндексированным с контекстом.
+Номер закупки задаёт, чьи чанки считать попаданием: они помечаются звёздочкой.
+Без --all переиндексируется только этот тендер, и он соревнуется без контекста
+с уже обогащёнными соседями. С --all контекст снимается и возвращается всему
+корпусу сразу, и это честнее: сравниваются два состояния всего индекса.
+
+После прогона корпус остаётся проиндексированным с контекстом.
 """
 
 from __future__ import annotations
@@ -48,15 +53,16 @@ def run_queries(embedder: LocalEmbedder, queries: list[str], reg_number: str) ->
     return results
 
 
-def main(docs_dir: Path, reg_number: str, queries: list[str]) -> None:
+def main(docs_dir: Path, reg_number: str, queries: list[str], whole_corpus: bool = False) -> None:
     embedder = LocalEmbedder(settings.embedding_model, settings.embedding_dim)
+    only = None if whole_corpus else [reg_number]
 
     settings.use_contextual = False
-    ingest_tenders.main(docs_dir, [reg_number])
+    ingest_tenders.main(docs_dir, only)
     before = run_queries(embedder, queries, reg_number)
 
     settings.use_contextual = True
-    ingest_tenders.main(docs_dir, [reg_number])
+    ingest_tenders.main(docs_dir, only)
     after = run_queries(embedder, queries, reg_number)
 
     for query in queries:
@@ -75,7 +81,8 @@ def main(docs_dir: Path, reg_number: str, queries: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print('Использование: python scripts/measure_contextual.py <docs> <номер> "запрос" [...]')
+    args = [a for a in sys.argv[1:] if a != "--all"]
+    if len(args) < 3:
+        print('Использование: python scripts/measure_contextual.py [--all] <docs> <номер> "запрос" [...]')
         sys.exit(1)
-    main(Path(sys.argv[1]), sys.argv[2], sys.argv[3:])
+    main(Path(args[0]), args[1], args[2:], whole_corpus="--all" in sys.argv)
