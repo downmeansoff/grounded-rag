@@ -21,8 +21,8 @@ import os
 from pathlib import Path
 
 
-def cache_key(prompt_version: str, reg_number: str, attachment_name: str, text: str) -> str:
-    payload = "\x00".join([prompt_version, reg_number, attachment_name, text])
+def cache_key(prompt_version: str, doc_id: str, part_name: str, text: str) -> str:
+    payload = "\x00".join([prompt_version, doc_id, part_name, text])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

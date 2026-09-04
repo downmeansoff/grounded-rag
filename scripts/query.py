@@ -30,7 +30,7 @@ def main(query: str, k: int = 5) -> None:
 
     for i, hit in enumerate(hits, 1):
         score = "" if hit.rerank_score is None else f" rerank={hit.rerank_score:.4f}"
-        print(f"\n[{i}] distance={hit.distance:.4f}{score} reg={hit.reg_number} attachment={hit.attachment_name}#{hit.chunk_index}")
+        print(f"\n[{i}] distance={hit.distance:.4f}{score} doc={hit.doc_id} part={hit.part_name}#{hit.chunk_index}")
         print(f"    {hit.title}")
         snippet = hit.text.strip().replace("\n", " ")
         print(f"    {snippet[:300]}")

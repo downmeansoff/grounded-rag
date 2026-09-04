@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from grounded_rag.domain.plain import PlainProfile
 from grounded_rag.evaluation.dataset import check_against_corpus, check_against_index
 from grounded_rag.evaluation.metrics import (
     Gold,
@@ -22,7 +23,7 @@ GOLD = (Gold("111", "влажную уборку помещений"),)
 
 
 def test_whitespace_does_not_break_a_match():
-    # Таблицы в документах закупки приезжают с рваными отступами, и эталон
+    # Таблицы в документах приезжают с рваными отступами, и эталон
     # отличается от чанка только ими. Считать это промахом поиска нельзя.
     chunk = "Исполнитель  обеспечивает\n влажную   уборку\tпомещений гардеробов"
     assert relevance([chunk], GOLD) == [True]
@@ -67,21 +68,21 @@ def test_recall_ignores_what_lies_below_k():
     assert recall_at_k(texts, gold, 2) == 0.5
 
 
-def test_corpus_check_catches_a_fragment_from_another_tender(tmp_path):
-    # Самая дорогая ошибка разметки: номер тендера проставлен наугад. Замер
-    # тогда показывает ноль там, где поиск отработал верно.
+def test_corpus_check_catches_a_fragment_from_another_document(tmp_path):
+    # Самая дорогая ошибка разметки: идентификатор документа проставлен наугад.
+    # Замер тогда показывает ноль там, где поиск отработал верно.
     (tmp_path / "111.txt").write_text("влажную уборку помещений", encoding="utf-8")
     (tmp_path / "222.txt").write_text("ничего похожего", encoding="utf-8")
 
     question = Question("q", "уборка", (Gold("222", "влажную уборку помещений"),))
-    problems = check_against_corpus([question], tmp_path)
+    problems = check_against_corpus([question], tmp_path, PlainProfile())
 
     assert len(problems) == 2
     assert "нет в 222" in problems[0]
     assert "встречается ещё в 111" in problems[1]
 
 
-def test_corpus_check_accepts_a_fragment_listed_in_every_tender_that_has_it(tmp_path):
+def test_corpus_check_accepts_a_fragment_listed_in_every_document_that_has_it(tmp_path):
     (tmp_path / "111.txt").write_text("влажную уборку помещений", encoding="utf-8")
     (tmp_path / "222.txt").write_text("влажную   уборку\nпомещений", encoding="utf-8")
 
@@ -90,7 +91,7 @@ def test_corpus_check_accepts_a_fragment_listed_in_every_tender_that_has_it(tmp_
         "уборка",
         (Gold("111", "влажную уборку помещений"), Gold("222", "влажную уборку помещений")),
     )
-    assert check_against_corpus([question], tmp_path) == []
+    assert check_against_corpus([question], tmp_path, PlainProfile()) == []
 
 
 def test_index_check_catches_a_fragment_split_across_chunks():
@@ -112,8 +113,8 @@ def test_index_check_passes_when_a_chunk_holds_the_whole_fragment():
     assert check_against_index([question], chunks) == []
 
 
-def test_index_check_ignores_a_chunk_of_another_tender():
-    # Фраза нашлась, но в чужом тендере. Для разметки это не ответ.
+def test_index_check_ignores_a_chunk_of_another_document():
+    # Фраза нашлась, но в чужом документе. Для разметки это не ответ.
     chunks = [("222", 0, "влажную уборку помещений")]
     question = Question("q", "уборка", (Gold("111", "влажную уборку помещений"),))
 

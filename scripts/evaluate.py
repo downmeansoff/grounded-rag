@@ -3,7 +3,7 @@
 Использование:
     python scripts/evaluate.py [--vector|--rerank] <путь_к_output/docs> [eval/labeled.json]
 
-Сначала разметка сверяется с документами: фрагмент обязан лежать в том тендере,
+Сначала разметка сверяется с документами: фрагмент обязан лежать в том документе,
 за которым записан, и не встречаться в чужих. Не сошлось - прогон падает, а не
 показывает ноль: ноль от плохого поиска и ноль от кривой разметки выглядят
 одинаково, а значат разное.
@@ -26,6 +26,7 @@ if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from grounded_rag.config import settings
+from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
 from grounded_rag.evaluation.dataset import (
     check_against_corpus,
@@ -60,7 +61,9 @@ def report(problems: list[str], header: str) -> None:
 def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
     questions = load_questions(labeled_path)
 
-    problems = check_against_corpus(questions, docs_dir)
+    # Разбирает корпус тот же профиль, что его индексировал: разметка привязана
+    # к идентификаторам документов, а их выдаёт именно он.
+    problems = check_against_corpus(questions, docs_dir, make_domain(settings))
     if problems:
         report(problems, "Разметка не сходится с корпусом:")
 

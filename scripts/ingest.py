@@ -1,11 +1,15 @@
-"""Прогоняет корпус tenderhunt (output/docs/*.txt) через ingestion -> chunking -> embedding -> Postgres.
+"""Гоняет корпус через ingestion -> chunking -> embedding -> Postgres.
 
 Использование:
-    python scripts/ingest_tenders.py <путь_к_output/docs> [номер закупки ...]
+    python scripts/ingest.py <путь_к_папке_с_документами> [идентификатор ...]
 
-Номера закупки в конце сужают прогон до этих тендеров. Нужно это из-за
+Что именно лежит в папке и чем оно разбирается, решает профиль предметной
+области из DOMAIN: tenders ждёт выгрузку tenderhunt, plain берёт любые .txt и
+.md. Сам прогон про это не знает и одинаков для обоих.
+
+Идентификаторы в конце сужают прогон до этих документов. Нужно это из-за
 Contextual Retrieval: он делает вызов LLM на каждый чанк, бесплатный тариф
-GigaChat конечен, и разумно сначала обогатить один тендер, посмотреть на
+GigaChat конечен, и разумно сначала обогатить один документ, посмотреть на
 выдачу и только потом платить за весь корпус.
 """
 
@@ -22,13 +26,14 @@ from tqdm import tqdm
 from grounded_rag.chunk.recursive import chunk_text
 from grounded_rag.config import settings
 from grounded_rag.contextual.contextualizer import Contextualizer, enrich
+from grounded_rag.domain.base import DomainProfile
+from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
-from grounded_rag.ingest.loader import load_corpus
 from grounded_rag.llm import GigaChatModel
 from grounded_rag.store import postgres as store
 
 
-def build_contextualizer() -> Contextualizer | None:
+def build_contextualizer(profile: DomainProfile) -> Contextualizer | None:
     if not settings.use_contextual:
         return None
     if not settings.gigachat_credentials:
@@ -42,19 +47,21 @@ def build_contextualizer() -> Contextualizer | None:
     )
     return Contextualizer(
         model,
+        profile,
         cache_path=Path(settings.contextual_cache_path),
         head_chars=settings.contextual_head_chars,
     )
 
 
 def main(docs_dir: Path, only: list[str] | None = None) -> None:
-    docs = load_corpus(docs_dir)
+    profile = make_domain(settings)
+    docs = profile.load(docs_dir)
     if only:
-        docs = [doc for doc in docs if doc.reg_number in only]
-    print(f"Загружено документов: {len(docs)}")
+        docs = [doc for doc in docs if doc.doc_id in only]
+    print(f"Профиль: {profile.name}. Загружено документов: {len(docs)}")
 
     embedder = make_embedder(settings)
-    contextualizer = build_contextualizer()
+    contextualizer = build_contextualizer(profile)
     if contextualizer is not None:
         cached = len(contextualizer.cache) if contextualizer.cache else 0
         print(f"Contextual Retrieval включён, в кэше уже есть контекстов: {cached}")
@@ -65,10 +72,10 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
     total_chunks = 0
     for doc in tqdm(docs, desc="ingest"):
         store.upsert_document(conn, doc)
-        store.delete_chunks_for_document(conn, doc.reg_number)
+        store.delete_chunks_for_document(conn, doc.doc_id)
 
-        for att in doc.attachments:
-            chunks = chunk_text(att.text)
+        for part in doc.parts:
+            chunks = chunk_text(part.text)
             if not chunks:
                 continue
 
@@ -76,7 +83,7 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
             if contextualizer is None:
                 contexts = [""] * len(texts)
             else:
-                contexts = contextualizer.contexts_for(doc, att.name, texts)
+                contexts = contextualizer.contexts_for(doc, part.name, texts)
 
             # Эмбеддинг считается по склейке «контекст плюс текст», в базу
             # ложится оригинальный текст: цитата должна остаться документом.
@@ -86,8 +93,8 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
             for chunk, vector, context in zip(chunks, vectors, contexts):
                 store.insert_chunk(
                     conn,
-                    doc.reg_number,
-                    att.name,
+                    doc.doc_id,
+                    part.name,
                     chunk.index,
                     chunk.text,
                     vector,
@@ -115,6 +122,6 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Использование: python scripts/ingest_tenders.py <путь_к_output/docs> [номер ...]")
+        print("Использование: python scripts/ingest.py <путь_к_документам> [идентификатор ...]")
         sys.exit(1)
     main(Path(sys.argv[1]), sys.argv[2:])

@@ -11,18 +11,21 @@ import json
 
 from grounded_rag.contextual.cache import ContextCache, cache_key
 from grounded_rag.contextual.contextualizer import Contextualizer, enrich
-from grounded_rag.ingest.loader import Attachment, TenderDoc
+from grounded_rag.domain.base import Document, Part
+from grounded_rag.domain.tenders import TendersProfile
 from grounded_rag.llm import QuotaExhausted
 
-DOC = TenderDoc(
-    reg_number="0312100006326000036",
+# Формулировки промпта живут в профиле, поэтому без него контекстуализатор не
+# собирается: он не знает, что индексируется, и это правильно.
+PROFILE = TendersProfile()
+
+DOC = Document(
+    doc_id="0312100006326000036",
     title="Оказание услуг по гардеробному обслуживанию",
-    customer="ГБУК Музей",
-    price="450000",
     source_path="/tmp/doc.txt",
-    attachments=[
-        Attachment(
-            reg_number="0312100006326000036",
+    meta={"Заказчик": "ГБУК Музей", "НМЦК": "450000"},
+    parts=[
+        Part(
             name="Описание объекта закупки",
             ext="docx",
             text="Предметом закупки является гардеробное обслуживание посетителей музея. " * 40,
@@ -61,7 +64,7 @@ def test_enrich_without_context_returns_text_unchanged():
 
 def test_prompt_carries_metadata_head_and_chunk():
     model = FakeModel()
-    Contextualizer(model).context_for(DOC, "Описание объекта закупки", CHUNK)
+    Contextualizer(model, PROFILE).context_for(DOC, "Описание объекта закупки", CHUNK)
 
     _, user = model.prompts[0]
     assert "0312100006326000036" in user
@@ -76,23 +79,25 @@ def test_head_is_truncated_to_head_chars():
     # Документ целиком в промпт не уходит: у GigaChat нет кэша промптов, и
     # платить полным текстом за каждый чанк документа слишком дорого.
     model = FakeModel()
-    Contextualizer(model, head_chars=50).context_for(DOC, "Описание объекта закупки", CHUNK)
+    Contextualizer(model, PROFILE, head_chars=50).context_for(
+        DOC, "Описание объекта закупки", CHUNK
+    )
 
     _, user = model.prompts[0]
-    assert DOC.attachments[0].text[:50] in user
-    assert DOC.attachments[0].text[:200] not in user
+    assert DOC.parts[0].text[:50] in user
+    assert DOC.parts[0].text[:200] not in user
 
 
-def test_unknown_attachment_gives_empty_head_not_crash():
+def test_unknown_part_gives_empty_head_not_crash():
     model = FakeModel()
-    assert Contextualizer(model).context_for(DOC, "Другого такого нет", CHUNK) == "Раздел про порядок оплаты."
+    assert Contextualizer(model, PROFILE).context_for(DOC, "Другого такого нет", CHUNK) == "Раздел про порядок оплаты."
 
 
 def test_failed_call_is_counted_and_returns_empty_context():
     # Лимит бесплатного тарифа кончается посреди корпуса. Чанк уходит в индекс
     # без контекста, прогон продолжается, счётчик показывает масштаб потерь.
     model = FakeModel(fail=True)
-    contextualizer = Contextualizer(model)
+    contextualizer = Contextualizer(model, PROFILE)
 
     assert contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK) == ""
     assert contextualizer.failures == 1
@@ -101,7 +106,7 @@ def test_failed_call_is_counted_and_returns_empty_context():
 
 def test_cache_hit_does_not_call_model_again(tmp_path):
     model = FakeModel()
-    contextualizer = Contextualizer(model, cache_path=tmp_path / "contexts.json")
+    contextualizer = Contextualizer(model, PROFILE, cache_path=tmp_path / "contexts.json")
 
     first = contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK)
     second = contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK)
@@ -112,16 +117,16 @@ def test_cache_hit_does_not_call_model_again(tmp_path):
 
 def test_cache_survives_new_process(tmp_path):
     path = tmp_path / "contexts.json"
-    Contextualizer(FakeModel(), cache_path=path).context_for(DOC, "Описание объекта закупки", CHUNK)
+    Contextualizer(FakeModel(), PROFILE, cache_path=path).context_for(DOC, "Описание объекта закупки", CHUNK)
 
-    second_run = Contextualizer(FakeModel(answer="другой ответ"), cache_path=path)
+    second_run = Contextualizer(FakeModel(answer="другой ответ"), PROFILE, cache_path=path)
     assert second_run.context_for(DOC, "Описание объекта закупки", CHUNK) == "Раздел про порядок оплаты."
     assert second_run.calls == 0
 
 
 def test_changed_chunk_text_misses_cache(tmp_path):
     path = tmp_path / "contexts.json"
-    contextualizer = Contextualizer(FakeModel(), cache_path=path)
+    contextualizer = Contextualizer(FakeModel(), PROFILE, cache_path=path)
 
     contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK)
     contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK + " Дополнено.")
@@ -131,14 +136,16 @@ def test_changed_chunk_text_misses_cache(tmp_path):
 
 def test_cache_key_depends_on_prompt_version():
     # Иначе правка промпта молча подставляла бы старые контексты к новому.
-    assert cache_key("1", "reg", "att", "text") != cache_key("2", "reg", "att", "text")
+    # Версию промпта задаёт профиль, поэтому смена профиля тоже промахивается
+    # мимо чужого кэша, а не приклеивает к тендеру описание из другого домена.
+    assert cache_key("1", "doc", "part", "text") != cache_key("2", "doc", "part", "text")
 
 
 def test_broken_cache_file_does_not_break_ingest(tmp_path):
     path = tmp_path / "contexts.json"
     path.write_text("{это не json", encoding="utf-8")
 
-    contextualizer = Contextualizer(FakeModel(), cache_path=path)
+    contextualizer = Contextualizer(FakeModel(), PROFILE, cache_path=path)
     assert contextualizer.context_for(DOC, "Описание объекта закупки", CHUNK) == "Раздел про порядок оплаты."
 
 
@@ -160,7 +167,7 @@ def test_contexts_for_keeps_order_aligned_with_chunks():
             self.n += 1
             return f"контекст {self.n}"
 
-    contexts = Contextualizer(Counter()).contexts_for(
+    contexts = Contextualizer(Counter(), PROFILE).contexts_for(
         DOC, "Описание объекта закупки", ["первый", "второй", "третий"]
     )
     assert contexts == ["контекст 1", "контекст 2", "контекст 3"]
@@ -181,7 +188,7 @@ def test_exhausted_quota_stops_calling_model():
     # Разница с обычным сбоем: следующий вызов обречён так же, как этот.
     # Пятьсот обречённых запросов подряд стоят минут и не дают ни одного контекста.
     model = QuotaModel()
-    contextualizer = Contextualizer(model)
+    contextualizer = Contextualizer(model, PROFILE)
 
     contexts = contextualizer.contexts_for(
         DOC, "Описание объекта закупки", ["первый", "второй", "третий"]
@@ -200,9 +207,9 @@ def test_cache_still_works_after_quota_ran_out(tmp_path):
     # Оплаченное до обрыва должно доехать до индекса: иначе прогон, упавший на
     # лимите, обесценивал бы всё, за что уже заплатили.
     path = tmp_path / "contexts.json"
-    Contextualizer(FakeModel(), cache_path=path).context_for(DOC, "Описание объекта закупки", CHUNK)
+    Contextualizer(FakeModel(), PROFILE, cache_path=path).context_for(DOC, "Описание объекта закупки", CHUNK)
 
-    after = Contextualizer(QuotaModel(), cache_path=path)
+    after = Contextualizer(QuotaModel(), PROFILE, cache_path=path)
     after.exhausted = True
 
     assert after.context_for(DOC, "Описание объекта закупки", CHUNK) == "Раздел про порядок оплаты."

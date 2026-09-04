@@ -24,9 +24,9 @@ class FakeScorer:
 
 def _hit(text: str, distance: float = 0.5) -> SearchHit:
     return SearchHit(
-        reg_number="0312100006326000036",
+        doc_id="0312100006326000036",
         title="Оказание услуг по гардеробному обслуживанию",
-        attachment_name="Описание объекта закупки",
+        part_name="Описание объекта закупки",
         chunk_index=0,
         text=text,
         distance=distance,
