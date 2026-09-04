@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import os
+
 import psycopg
 import pytest
 
@@ -34,6 +36,11 @@ def conn():
     try:
         connection = store.connect(settings.dsn)
     except psycopg.OperationalError:
+        # Локально база опциональна: без docker compose эти тесты пропускаются,
+        # остальные идут. В CI пропуск означал бы зелёный прогон, не проверивший
+        # ни одного SQL, поэтому там отсутствие базы переводится в падение.
+        if os.getenv("RAG_REQUIRE_POSTGRES"):
+            raise
         pytest.skip("Postgres недоступен")
 
     connection.autocommit = False

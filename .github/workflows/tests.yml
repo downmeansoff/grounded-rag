@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    # Тесты гибридного поиска идут в настоящий Postgres с pgvector: проверяемое
+    # поведение живёт в SQL, и мок вокруг него проверял бы только сам мок.
+    # Образ тот же, что в docker-compose.yml, порт 5432 совпадает с дефолтом
+    # настроек, поэтому переменные окружения в шаге с тестами не нужны.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: grounded_rag
+          POSTGRES_USER: grounded_rag
+          POSTGRES_PASSWORD: grounded_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U grounded_rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Колёса torch с CUDA весят под два гигабайта и на CPU-раннере не нужны
+      # ни для чего: модель эмбеддингов в тестах не грузится вовсе.
+      - name: Install CPU torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      # Без базы тесты Postgres помечаются skipped, и прогон остаётся зелёным,
+      # ничего не проверив в SQL. В CI такое молчание недопустимо: переменная
+      # переводит недоступную базу из пропуска в падение.
+      - name: Run tests
+        env:
+          RAG_REQUIRE_POSTGRES: "1"
+        run: pytest -q

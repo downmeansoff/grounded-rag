@@ -1,7 +1,7 @@
 [project]
 name = "grounded-rag"
 version = "0.1.0"
-description = "Postgres-native grounded RAG engine — tender corpus first, legal second."
+description = "Grounded RAG engine on Postgres: hybrid search, cited answers, swappable domain profile."
 requires-python = ">=3.11"
 dependencies = [
     "psycopg[binary]>=3.2",

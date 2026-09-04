@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from grounded_rag.config import Settings
 from grounded_rag.domain.base import DomainProfile
+from grounded_rag.domain.markdown import MarkdownProfile
 from grounded_rag.domain.plain import PlainProfile
 from grounded_rag.domain.tenders import TendersProfile
 
 PROFILES: dict[str, type[DomainProfile]] = {
     TendersProfile.name: TendersProfile,
     PlainProfile.name: PlainProfile,
+    MarkdownProfile.name: MarkdownProfile,
 }
 
 
