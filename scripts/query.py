@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import sys
 
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from grounded_rag.config import settings
 from grounded_rag.embed.local import LocalEmbedder
 from grounded_rag.store import postgres as store
@@ -18,7 +21,7 @@ def main(query: str, k: int = 5) -> None:
     conn = store.connect(settings.dsn)
 
     query_vec = embedder.embed_query(query)
-    hits = store.search(conn, query_vec, k=k)
+    hits = store.search_hybrid(conn, query_vec, query, k=k)
 
     if not hits:
         print("Ничего не найдено.")

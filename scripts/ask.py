@@ -22,7 +22,7 @@ def main(query: str, k: int = 5) -> None:
     conn = store.connect(settings.dsn)
 
     query_vec = embedder.embed_query(query)
-    hits = store.search(conn, query_vec, k=k)
+    hits = store.search_hybrid(conn, query_vec, query, k=k)
     conn.close()
 
     if not hits:

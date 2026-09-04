@@ -39,6 +39,34 @@ def ensure_schema(conn: psycopg.Connection, dim: int) -> None:
         "CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw "
         "ON chunks USING hnsw (embedding vector_cosine_ops)"
     )
+    ensure_fulltext(conn)
+
+
+def ensure_fulltext(conn: psycopg.Connection) -> None:
+    """Полнотекстовый индекс рядом с векторным: половина гибридного поиска.
+
+    Вектор находит перефразировки, но проваливает точные редкие токены -
+    номер закупки, статью закона, номер приложения. Полнотекст ловит ровно их.
+
+    В индекс идёт не только text, но и reg_number с attachment_name: номер
+    закупки внутри текста чанка обычно не встречается, он живёт в метаданных,
+    и без них запрос «0312100006326000036» не находит вообще ничего.
+
+    Конфигурация 'russian' задана явно: двухаргументный to_tsvector IMMUTABLE,
+    поэтому колонку можно объявить GENERATED и не поддерживать руками.
+    """
+    conn.execute("""
+        ALTER TABLE chunks ADD COLUMN IF NOT EXISTS tsv tsvector
+        GENERATED ALWAYS AS (
+            to_tsvector(
+                'russian',
+                coalesce(reg_number, '') || ' '
+                || coalesce(attachment_name, '') || ' '
+                || coalesce(text, '')
+            )
+        ) STORED
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS chunks_tsv_gin ON chunks USING gin (tsv)")
 
 
 def upsert_document(conn: psycopg.Connection, doc: TenderDoc) -> None:
@@ -98,5 +126,76 @@ def search(conn: psycopg.Connection, query_embedding: list[float], k: int = 5) -
         LIMIT %s
         """,
         (query_embedding, k),
+    ).fetchall()
+    return [SearchHit(*row) for row in rows]
+
+
+RRF_K = 60  # сглаживание из оригинальной статьи про Reciprocal Rank Fusion
+
+
+def search_hybrid(
+    conn: psycopg.Connection,
+    query_embedding: list[float],
+    query_text: str,
+    k: int = 5,
+    candidates: int = 30,
+) -> list[SearchHit]:
+    """Вектор и полнотекст, слитые через RRF.
+
+    Скоры двух поисков несопоставимы напрямую: косинусное расстояние и ts_rank_cd
+    живут в разных шкалах, а нормализация их шкал зависит от выборки и плывёт от
+    запроса к запросу. RRF складывает не скоры, а обратные ранги, поэтому шкалы
+    вообще не нужны: важно лишь, насколько высоко документ встал в каждом списке.
+
+    Поле distance остаётся настоящим косинусным расстоянием и считается для всех
+    отобранных чанков, включая найденные только полнотекстом. Порядок при этом
+    задаёт RRF, а не distance.
+    """
+    rows = conn.execute(
+        """
+        WITH vector_hits AS (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY distance) AS rank
+            FROM (
+                SELECT id, embedding <=> %(vec)s::vector AS distance
+                FROM chunks
+                ORDER BY embedding <=> %(vec)s::vector
+                LIMIT %(candidates)s
+            ) v
+        ),
+        text_hits AS (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY rank_score DESC) AS rank
+            FROM (
+                SELECT c.id, ts_rank_cd(c.tsv, q) AS rank_score
+                FROM chunks c, plainto_tsquery('russian', %(query)s) q
+                WHERE c.tsv @@ q
+                ORDER BY ts_rank_cd(c.tsv, q) DESC
+                LIMIT %(candidates)s
+            ) t
+        ),
+        fused AS (
+            SELECT id, SUM(1.0 / (%(rrf)s + rank)) AS score
+            FROM (
+                SELECT id, rank FROM vector_hits
+                UNION ALL
+                SELECT id, rank FROM text_hits
+            ) ranked
+            GROUP BY id
+            ORDER BY score DESC
+            LIMIT %(k)s
+        )
+        SELECT c.reg_number, d.title, c.attachment_name, c.chunk_index, c.text,
+               c.embedding <=> %(vec)s::vector AS distance
+        FROM fused f
+        JOIN chunks c ON c.id = f.id
+        JOIN documents d ON d.reg_number = c.reg_number
+        ORDER BY f.score DESC
+        """,
+        {
+            "vec": query_embedding,
+            "query": query_text,
+            "candidates": candidates,
+            "k": k,
+            "rrf": RRF_K,
+        },
     ).fetchall()
     return [SearchHit(*row) for row in rows]
