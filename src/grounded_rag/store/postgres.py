@@ -122,6 +122,17 @@ def insert_chunk(
     )
 
 
+def all_chunk_texts(conn: psycopg.Connection) -> list[tuple[str, int, str]]:
+    """Весь индекс как (номер закупки, номер чанка, текст).
+
+    Нужно замеру: проверить, что эталонный фрагмент вообще достижим поиском.
+    Фрагмент может лежать в документе, но развалиться по границе чанков, и
+    тогда ни один чанк его не содержит, а метрика показывает ноль.
+    """
+    rows = conn.execute("SELECT reg_number, chunk_index, text FROM chunks").fetchall()
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
 @dataclass
 class SearchHit:
     reg_number: str
