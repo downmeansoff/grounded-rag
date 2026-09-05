@@ -125,6 +125,20 @@ def test_load_walks_subfolders_and_ignores_other_formats(tmp_path):
     assert [d.doc_id for d in docs] == ["a", "b"]
 
 
+def test_load_records_the_path_relative_to_the_corpus(tmp_path):
+    # Путь это ключ фильтра ("Файл=sub/"), поэтому он относительный: абсолютный
+    # менялся бы от машины к машине, а заметка без frontmatter иначе осталась бы
+    # вовсе без метаданных и недостижимой ни одним фильтром.
+    _write(tmp_path, "sub/b.markdown", "# B\n\nВторая.\n")
+    _write(tmp_path, "note.md", NOTE)
+
+    by_id = {doc.doc_id: doc for doc in MarkdownProfile().load(tmp_path)}
+
+    assert by_id["b"].meta == {"Файл": "sub/b.markdown"}
+    assert by_id["deploy-guide"].meta["Файл"] == "note.md"
+    assert by_id["deploy-guide"].meta["автор"] == "Глеб"  # своё не перетёрто
+
+
 def test_citation_names_the_section(tmp_path):
     profile = MarkdownProfile()
     assert profile.citation("deploy-guide", "Требования", 2) == "заметка deploy-guide, Требования#2"

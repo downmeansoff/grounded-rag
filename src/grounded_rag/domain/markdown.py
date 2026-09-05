@@ -115,7 +115,8 @@ class MarkdownProfile(DomainProfile):
     name = "markdown"
     entity = "заметка"
     corpus = "заметкам базы знаний"
-    prompt_version = "markdown-1"
+    # markdown-2: в метаданные добавился путь файла, а он попадает в промпт.
+    prompt_version = "markdown-2"
 
     def load(self, docs_dir: Path) -> list[Document]:
         docs = []
@@ -124,6 +125,11 @@ class MarkdownProfile(DomainProfile):
                 continue
             doc = parse_file(path)
             if doc:
+                # Путь относительно корня корпуса, а не абсолютный: он нужен как
+                # ключ фильтра ("Файл=архив/"), и заметка без frontmatter иначе
+                # осталась бы вовсе без метаданных, то есть недостижимой ни одним
+                # фильтром. Своё значение автора не перетирается.
+                doc.meta.setdefault("Файл", path.relative_to(docs_dir).as_posix())
                 docs.append(doc)
         return docs
 
