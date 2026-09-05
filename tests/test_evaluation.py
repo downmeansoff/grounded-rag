@@ -7,8 +7,14 @@
 
 from __future__ import annotations
 
+import json
+
 from grounded_rag.domain.plain import PlainProfile
-from grounded_rag.evaluation.dataset import check_against_corpus, check_against_index
+from grounded_rag.evaluation.dataset import (
+    check_against_corpus,
+    check_against_index,
+    load_questions,
+)
 from grounded_rag.evaluation.metrics import (
     Gold,
     Question,
@@ -111,6 +117,42 @@ def test_index_check_passes_when_a_chunk_holds_the_whole_fragment():
     question = Question("q", "уборка", (Gold("111", "влажную уборку помещений"),))
 
     assert check_against_index([question], chunks) == []
+
+
+def _labeled(tmp_path, questions):
+    path = tmp_path / "labeled.json"
+    path.write_text(json.dumps({"questions": questions}, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_question_without_filters_is_read_as_unfiltered(tmp_path):
+    # Пустой фильтр это признак, по которому вопрос идёт в общие числа. Приди
+    # он словарём, вопрос без фильтра было бы не отличить от вопроса с пустым.
+    path = _labeled(tmp_path, [{"id": "q", "query": "уборка", "gold": [{"doc_id": "111", "phrase": "уборка"}]}])
+
+    question = load_questions(path)[0]
+
+    assert question.filters == ()
+    assert not question.filters
+
+
+def test_filters_are_read_as_ordered_pairs(tmp_path):
+    path = _labeled(
+        tmp_path,
+        [
+            {
+                "id": "q",
+                "query": "штраф",
+                "filters": {"Заказчик": "ПОЛИКЛИНИКА №5", "НМЦК": "6730800"},
+                "gold": [{"doc_id": "111", "phrase": "штраф"}],
+            }
+        ],
+    )
+
+    question = load_questions(path)[0]
+
+    assert question.filters == (("Заказчик", "ПОЛИКЛИНИКА №5"), ("НМЦК", "6730800"))
+    assert dict(question.filters)["Заказчик"] == "ПОЛИКЛИНИКА №5"
 
 
 def test_index_check_ignores_a_chunk_of_another_document():

@@ -21,6 +21,7 @@ def load_questions(path: Path) -> list[Question]:
             id=q["id"],
             query=q["query"],
             gold=tuple(Gold(g["doc_id"], g["phrase"]) for g in q["gold"]),
+            filters=tuple(q.get("filters", {}).items()),
         )
         for q in data["questions"]
     ]

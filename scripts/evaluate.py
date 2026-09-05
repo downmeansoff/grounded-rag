@@ -15,6 +15,12 @@
 `--vector` только эмбеддинги, по умолчанию гибрид с полнотекстом, `--rerank`
 гибрид плюс cross-encoder. Индекс при этом один и тот же, переиндексация не
 нужна.
+
+Вопросы с фильтром по метаданным идут отдельным блоком и в общие числа не
+входят: фильтр сужает корпус до одного заказчика, попасть по такому вопросу
+легче, и общая средняя выросла бы от работы, которой поиск не делал. Рядом
+печатается позиция того же вопроса без фильтра, потому что смысл фильтра
+именно в разнице между этими двумя.
 """
 
 from __future__ import annotations
@@ -58,6 +64,34 @@ def report(problems: list[str], header: str) -> None:
     sys.exit(1)
 
 
+def search(conn, embedder, question, mode: str, filters: dict[str, str] | None) -> list[str]:
+    """Тексты выдачи по вопросу, сверху вниз.
+
+    Глубина больше K: MRR должен различать «нашлось седьмым» и «не нашлось».
+    """
+    vector = embedder.embed_query(question.query)
+    if mode == "vector":
+        found = store.search(conn, vector, k=DEPTH, filters=filters)
+    else:
+        found = retrieve(conn, vector, question.query, k=DEPTH, filters=filters)
+    return [hit.text for hit in found]
+
+
+def where(flags: list[bool]) -> str:
+    position = flags.index(True) + 1 if any(flags) else 0
+    return f"позиция {position}" if position else f"не найдено в топ-{DEPTH}"
+
+
+def totals(rows: list[tuple[bool, float, float]], header: str) -> None:
+    total = len(rows)
+    print(
+        f"\n{header}hit@{K} {sum(h for h, _, _ in rows)}/{total} = "
+        f"{sum(h for h, _, _ in rows) / total:.2f}   "
+        f"MRR@{DEPTH} {sum(r for _, r, _ in rows) / total:.3f}   "
+        f"recall@{K} {sum(c for _, _, c in rows) / total:.2f}"
+    )
+
+
 def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
     questions = load_questions(labeled_path)
 
@@ -83,36 +117,56 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
     settings.use_rerank = mode == "rerank"
     print(f"Режим поиска: {mode}")
 
-    hits, ranks, recalls = [], [], []
-    for question in questions:
-        vector = embedder.embed_query(question.query)
-        # Глубина больше K: MRR должен различать «нашлось седьмым» и «не нашлось».
-        if mode == "vector":
-            found = store.search(conn, vector, k=DEPTH)
-        else:
-            found = retrieve(conn, vector, question.query, k=DEPTH)
-        texts = [hit.text for hit in found]
+    # Вопросы с фильтром считаются отдельно и в общие числа не идут. Фильтр
+    # сужает корпус до одного заказчика, попасть по такому вопросу заметно
+    # легче, и подмешивать его в ту же среднюю значило бы поднять её работой,
+    # которую поиск не делал.
+    plain = [q for q in questions if not q.filters]
+    filtered = [q for q in questions if q.filters]
 
+    rows = []
+    for question in plain:
+        texts = search(conn, embedder, question, mode, None)
         flags = relevance(texts, question.gold)
-        hit = hit_at_k(flags, K)
-        rank = reciprocal_rank(flags)
-        recall = recall_at_k(texts, question.gold, K)
+        row = (
+            hit_at_k(flags, K),
+            reciprocal_rank(flags),
+            recall_at_k(texts, question.gold, K),
+        )
+        rows.append(row)
+        mark = "+" if row[0] else "-"
+        print(
+            f"{mark} {question.id:<22} {where(flags):<22} "
+            f"recall@{K} {row[2]:.2f}   {question.query}"
+        )
+    totals(rows, "")
 
-        hits.append(hit)
-        ranks.append(rank)
-        recalls.append(recall)
+    if not filtered:
+        conn.close()
+        return
 
-        position = flags.index(True) + 1 if any(flags) else 0
-        where = f"позиция {position}" if position else f"не найдено в топ-{DEPTH}"
-        mark = "+" if hit else "-"
-        print(f"{mark} {question.id:<22} {where:<22} recall@{K} {recall:.2f}   {question.query}")
-
-    total = len(questions)
-    print(
-        f"\nhit@{K} {sum(hits)}/{total} = {sum(hits) / total:.2f}   "
-        f"MRR@{DEPTH} {sum(ranks) / total:.3f}   "
-        f"recall@{K} {sum(recalls) / total:.2f}"
-    )
+    # Рядом с каждым фильтром печатается та же выдача без него: смысл фильтра
+    # в разнице между этими двумя строками, а не в самой по себе позиции.
+    print("\nВопросы с фильтром по метаданным (в числа выше не входят):")
+    rows = []
+    for question in filtered:
+        pairs = dict(question.filters)
+        without = relevance(search(conn, embedder, question, mode, None), question.gold)
+        texts = search(conn, embedder, question, mode, pairs)
+        flags = relevance(texts, question.gold)
+        row = (
+            hit_at_k(flags, K),
+            reciprocal_rank(flags),
+            recall_at_k(texts, question.gold, K),
+        )
+        rows.append(row)
+        mark = "+" if row[0] else "-"
+        shown = ", ".join(f"{key}={value}" for key, value in pairs.items())
+        print(
+            f"{mark} {question.id:<30} без фильтра: {where(without):<22} "
+            f"с фильтром: {where(flags):<14} {shown}"
+        )
+    totals(rows, "с фильтром: ")
     conn.close()
 
 
