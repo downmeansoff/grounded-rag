@@ -48,5 +48,5 @@ class Reranker:
             return []
 
         scores = self.model.predict([(query, hit.text) for hit in hits])
-        ranked = sorted(zip(hits, scores), key=lambda pair: pair[1], reverse=True)
+        ranked = sorted(zip(hits, scores, strict=True), key=lambda pair: pair[1], reverse=True)
         return [replace(hit, rerank_score=float(score)) for hit, score in ranked[:top_k]]

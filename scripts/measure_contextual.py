@@ -31,12 +31,12 @@ if sys.stdout.encoding != "utf-8":
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import ingest
+
 from grounded_rag.config import settings
 from grounded_rag.embed.base import Embedder
 from grounded_rag.embed.factory import make_embedder
 from grounded_rag.store import postgres as store
-
-import ingest
 
 K = 5
 

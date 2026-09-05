@@ -11,7 +11,8 @@ from collections.abc import Mapping, Sequence
 
 import psycopg
 
-from grounded_rag.config import Settings, settings as default_settings
+from grounded_rag.config import Settings
+from grounded_rag.config import settings as default_settings
 from grounded_rag.rerank.cross_encoder import Reranker
 from grounded_rag.store import postgres as store
 from grounded_rag.store.postgres import SearchHit

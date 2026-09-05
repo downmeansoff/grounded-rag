@@ -88,9 +88,9 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
             # Эмбеддинг считается по склейке «контекст плюс текст», в базу
             # ложится оригинальный текст: цитата должна остаться документом.
             vectors = embedder.embed_passages(
-                [enrich(ctx, text) for ctx, text in zip(contexts, texts)]
+                [enrich(ctx, text) for ctx, text in zip(contexts, texts, strict=True)]
             )
-            for chunk, vector, context in zip(chunks, vectors, contexts):
+            for chunk, vector, context in zip(chunks, vectors, contexts, strict=True):
                 store.insert_chunk(
                     conn,
                     doc.doc_id,

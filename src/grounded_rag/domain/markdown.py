@@ -105,7 +105,7 @@ def parse_file(path: Path) -> Document | None:
         meta=meta,
         parts=[
             Part(name=name, text=text, ext=path.suffix.lstrip("."))
-            for name, (_, text) in zip(names, sections)
+            for name, (_, text) in zip(names, sections, strict=True)
         ],
         raw=raw,
     )

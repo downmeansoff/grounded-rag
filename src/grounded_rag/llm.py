@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Protocol, TypeVar
+from collections.abc import Callable
+from typing import Protocol, TypeVar
 
 T = TypeVar("T")
 
