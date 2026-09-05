@@ -180,6 +180,19 @@ def index_keys(conn: psycopg.Connection) -> dict[str, str]:
     return {doc_id: key for doc_id, key in rows}
 
 
+def meta_by_document(conn: psycopg.Connection, key: str) -> dict[str, str]:
+    """Значение одного ключа метаданных по каждому документу, одним запросом.
+
+    Нужно замеру: чтобы сказать, верного ли заказчика достал автофильтр, надо
+    знать, чей документ содержит эталонный фрагмент.
+    """
+    rows = conn.execute(
+        "SELECT doc_id, COALESCE(meta ->> %(key)s, '') FROM documents",
+        {"key": key},
+    ).fetchall()
+    return {doc_id: value for doc_id, value in rows}
+
+
 def delete_chunks_for_document(conn: psycopg.Connection, doc_id: str) -> None:
     conn.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
 

@@ -183,6 +183,25 @@ def test_name_still_works_next_to_the_domain_word(conn) -> None:
     assert found == UNIVERSITY
 
 
+def test_owner_of_each_document_is_readable(conn) -> None:
+    """Замеру нужен правильный ответ: чей документ содержит эталон.
+
+    Без него по строке видно только «автофильтр что-то нашёл», а надо
+    различать три исхода: опознал верно, опознал чужого, промолчал.
+    """
+    _seed(conn, "0001", CLINIC)
+    _seed(conn, "0002", MUSEUM)
+
+    assert store.meta_by_document(conn, KEY) == {"0001": CLINIC, "0002": MUSEUM}
+
+
+def test_missing_metadata_key_is_empty_not_absent(conn) -> None:
+    """Профиль без заказчика в метаданных не должен ломать сводку."""
+    _seed(conn, "0001", CLINIC)
+
+    assert store.meta_by_document(conn, "Издатель") == {"0001": ""}
+
+
 def test_short_name_keeps_the_distinguishing_part() -> None:
     """Обрезка по началу строки различала бы одно «МУНИЦИПАЛЬНОЕ БЮДЖЕТНОЕ»."""
     assert short_name(CLINIC) == "ГОРОДСКАЯ ПОЛИКЛИНИКА №5"

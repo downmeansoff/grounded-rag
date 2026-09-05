@@ -144,9 +144,17 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid", auto: bool = 
             else f'Автофильтр включён, но профиль "{profile.name}" не хранит заказчика в метаданных'
         )
 
+    # Заказчик документа, в котором лежит эталон: это и есть правильный ответ
+    # автофильтра, и без него по строкам замера видно только «что-то нашёл».
+    owners = store.meta_by_document(conn, key) if key else {}
+    guesses = {"верно": 0, "мимо": 0, "молчит": 0}
+
     rows = []
     for question in plain:
         pairs, found = auto_filter(conn, question.query, key, None, known, common) if key else ({}, None)
+        if key:
+            wanted = {owners.get(gold.doc_id, "") for gold in question.gold}
+            guesses["молчит" if found is None else "верно" if found in wanted else "мимо"] += 1
         texts = search(conn, embedder, question, mode, pairs or None)
         flags = relevance(texts, question.gold)
         row = (
@@ -162,6 +170,14 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid", auto: bool = 
             f"recall@{K} {row[2]:.2f}   {question.query}{note}"
         )
     totals(rows, "")
+    if key:
+        # Молчание и промах стоят разного, поэтому и считаются отдельно.
+        # Молчание возвращает вопрос к поиску по всему корпусу, промах уводит
+        # его в чужую закупку, где ответа нет и быть не может.
+        print(
+            f"Автофильтр: опознал верно {guesses['верно']}, "
+            f"мимо {guesses['мимо']}, промолчал {guesses['молчит']} из {len(plain)}"
+        )
 
     if not filtered:
         conn.close()
