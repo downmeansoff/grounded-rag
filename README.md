@@ -1,7 +1,7 @@
 # grounded-rag
 
 [![tests](https://github.com/downmeansoff/grounded-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/downmeansoff/grounded-rag/actions/workflows/tests.yml)
-![tests](https://img.shields.io/badge/tests-131%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)
 ![python](https://img.shields.io/badge/python-3.11-blue)
 ![postgres](https://img.shields.io/badge/store-pgvector-336791)
 

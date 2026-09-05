@@ -37,7 +37,7 @@ from pathlib import Path
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-from grounded_rag.autofilter import auto_filter, common_lexemes, customer_lexemes
+from grounded_rag.autofilter import auto_filter, common_lexemes, customer_lexemes, short_name
 from grounded_rag.config import settings
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
@@ -156,7 +156,7 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid", auto: bool = 
         )
         rows.append(row)
         mark = "+" if row[0] else "-"
-        note = "" if not auto else f"   [{found[:40] if found else 'заказчик не опознан'}]"
+        note = "" if not auto else f"   [{short_name(found) if found else 'заказчик не опознан'}]"
         print(
             f"{mark} {question.id:<22} {where(flags):<22} "
             f"recall@{K} {row[2]:.2f}   {question.query}{note}"
@@ -193,7 +193,7 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid", auto: bool = 
             if guess and hand and hand in guess.lower():
                 note = "   автофильтр: тот же заказчик"
             elif guess:
-                note = f"   автофильтр: другой заказчик ({guess[:30]})"
+                note = f"   автофильтр: другой заказчик ({short_name(guess, 30)})"
             else:
                 note = "   автофильтр: не опознал"
         print(

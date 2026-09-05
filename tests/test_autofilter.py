@@ -11,7 +11,13 @@
 
 from __future__ import annotations
 
-from grounded_rag.autofilter import auto_filter, common_lexemes, customer_lexemes, pick_customer
+from grounded_rag.autofilter import (
+    auto_filter,
+    common_lexemes,
+    customer_lexemes,
+    pick_customer,
+    short_name,
+)
 from grounded_rag.config import settings
 from grounded_rag.domain.base import Document
 from grounded_rag.store import postgres as store
@@ -175,6 +181,18 @@ def test_name_still_works_next_to_the_domain_word(conn) -> None:
     _, found = auto_filter(conn, "сколько человеко-часов в уральском медицинском университете", KEY)
 
     assert found == UNIVERSITY
+
+
+def test_short_name_keeps_the_distinguishing_part() -> None:
+    """Обрезка по началу строки различала бы одно «МУНИЦИПАЛЬНОЕ БЮДЖЕТНОЕ»."""
+    assert short_name(CLINIC) == "ГОРОДСКАЯ ПОЛИКЛИНИКА №5"
+    assert short_name(MUSEUM) == "ОБЛАСТНОЙ МУЗЕЙ ИМЕНИ АЛАБИНА"
+
+
+def test_short_name_without_quotes_falls_back_to_the_whole_value() -> None:
+    """Имя без кавычек не обрезается по началу, пока помещается в предел."""
+    assert short_name("ИП Иванов И. И.") == "ИП Иванов И. И."
+    assert short_name("ГБУК «" + "О" * 60 + "»").endswith("…")
 
 
 def test_profile_without_customer_key(conn) -> None:

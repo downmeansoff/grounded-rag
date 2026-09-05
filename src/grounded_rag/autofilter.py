@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Collection, Mapping
 
@@ -164,6 +165,23 @@ def auto_filter(
     if found:
         merged[key] = found
     return merged, found
+
+
+QUOTED = re.compile(r'[«"\'](.+?)[»"\']', re.DOTALL)
+
+
+def short_name(value: str, limit: int = 40) -> str:
+    """Различающая часть имени заказчика, для строк отчёта.
+
+    Обрезка по первым сорока символам для таких имён бесполезна: «МУНИЦИПАЛЬНОЕ
+    БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ КУЛЬТУРЫ ...» и «МУНИЦИПАЛЬНОЕ БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ
+    ЗДРАВООХРАНЕНИЯ ...» в сорок символов дают одно и то же начало, и по строке
+    замера не видно, какого заказчика движок выбрал. Различает их то, что стоит
+    в кавычках, поэтому берётся оно.
+    """
+    quoted = QUOTED.search(value)
+    name = quoted.group(1).strip() if quoted else value.strip()
+    return name if len(name) <= limit else name[: limit - 1] + "…"
 
 
 def explain(domain_name: str, key: str, found: str | None) -> str:
