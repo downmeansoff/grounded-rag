@@ -93,6 +93,11 @@ def ensure_schema(conn: psycopg.Connection, dim: int) -> None:
             source_path TEXT
         )
     """)
+    # Отдельным ALTER, а не колонкой в CREATE TABLE: у собранных до неё
+    # индексов таблица уже есть, и CREATE TABLE IF NOT EXISTS её не тронет.
+    # Пустой отпечаток у старых строк читается как «неизвестно», то есть
+    # документ переиндексируется один раз и дальше пропускается.
+    conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS index_key TEXT")
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS chunks (
             id SERIAL PRIMARY KEY,
@@ -148,18 +153,31 @@ def ensure_fulltext(conn: psycopg.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS chunks_tsv_gin ON chunks USING gin (tsv)")
 
 
-def upsert_document(conn: psycopg.Connection, doc: Document) -> None:
+def upsert_document(conn: psycopg.Connection, doc: Document, index_key: str = "") -> None:
     conn.execute(
         """
-        INSERT INTO documents (doc_id, title, meta, source_path)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO documents (doc_id, title, meta, source_path, index_key)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (doc_id) DO UPDATE SET
             title = EXCLUDED.title,
             meta = EXCLUDED.meta,
-            source_path = EXCLUDED.source_path
+            source_path = EXCLUDED.source_path,
+            index_key = EXCLUDED.index_key
         """,
-        (doc.doc_id, doc.title, Json(doc.meta), doc.source_path),
+        (doc.doc_id, doc.title, Json(doc.meta), doc.source_path, index_key),
     )
+
+
+def index_keys(conn: psycopg.Connection) -> dict[str, str]:
+    """Отпечатки всех проиндексированных документов, одним запросом.
+
+    Одним, потому что на архиве в тысячу закупок отдельное чтение на документ
+    это тысяча обращений к базе ради тысячи коротких строк.
+    """
+    rows = conn.execute(
+        "SELECT doc_id, COALESCE(index_key, '') FROM documents"
+    ).fetchall()
+    return {doc_id: key for doc_id, key in rows}
 
 
 def delete_chunks_for_document(conn: psycopg.Connection, doc_id: str) -> None:

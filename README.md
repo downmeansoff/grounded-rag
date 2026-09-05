@@ -1,7 +1,7 @@
 # grounded-rag
 
 [![tests](https://github.com/downmeansoff/grounded-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/downmeansoff/grounded-rag/actions/workflows/tests.yml)
-![tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-143%20passed-brightgreen)
 ![python](https://img.shields.io/badge/python-3.11-blue)
 ![postgres](https://img.shields.io/badge/store-pgvector-336791)
 
@@ -40,10 +40,13 @@ cp .env.example .env
 
 ```bash
 python scripts/ingest.py "path/to/docs"
+python scripts/ingest.py --force "path/to/docs"   # переиндексировать всё заново
 python scripts/query.py "уборка помещений клининг"
 python scripts/ask.py "какой график работы?"
 python scripts/ask.py "какой график работы?" --filter "Заказчик=музей"
 ```
+
+Повторный `ingest` трогает только изменившиеся документы. Отпечаток считается от содержимого документа и от настроек сборки индекса разом, поэтому смена модели эмбеддингов, размера чанка или профиля переиндексирует корпус целиком, а добавление одной закупки к тысяче стоит одной закупки. Что именно входит в отпечаток, написано в [`index_key.py`](src/grounded_rag/index_key.py).
 
 `ask.py` требует `GIGACHAT_CREDENTIALS` в `.env`: ключ авторизации из личного кабинета developers.sber.ru, раздел API, GigaChat API.
 

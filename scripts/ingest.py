@@ -7,10 +7,19 @@
 области из DOMAIN: tenders ждёт выгрузку tenderhunt, plain берёт любые .txt и
 .md. Сам прогон про это не знает и одинаков для обоих.
 
+    python scripts/ingest.py --force <путь_к_папке_с_документами>
+
 Идентификаторы в конце сужают прогон до этих документов. Нужно это из-за
 Contextual Retrieval: он делает вызов LLM на каждый чанк, бесплатный тариф
 GigaChat конечен, и разумно сначала обогатить один документ, посмотреть на
 выдачу и только потом платить за весь корпус.
+
+Документ, отпечаток которого совпал с уже записанным, пропускается: на архиве
+закупок повторный прогон обычно добавляет несколько новых документов к тысяче
+старых, и пересчитывать эмбеддинги для всей тысячи ради этого незачем. Что
+входит в отпечаток, описано в `index_key.py`; смена модели, размера чанка или
+профиля меняет его у всех документов сразу. `--force` переиндексирует всё,
+не спрашивая отпечаток.
 """
 
 from __future__ import annotations
@@ -23,12 +32,13 @@ if sys.stdout.encoding != "utf-8":
 
 from tqdm import tqdm
 
-from grounded_rag.chunk.recursive import chunk_text
+from grounded_rag.chunk.recursive import DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP, chunk_text
 from grounded_rag.config import settings
 from grounded_rag.contextual.contextualizer import Contextualizer, enrich
-from grounded_rag.domain.base import DomainProfile
+from grounded_rag.domain.base import Document, DomainProfile
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
+from grounded_rag.index_key import index_key
 from grounded_rag.llm import GigaChatModel
 from grounded_rag.store import postgres as store
 
@@ -53,7 +63,20 @@ def build_contextualizer(profile: DomainProfile) -> Contextualizer | None:
     )
 
 
-def main(docs_dir: Path, only: list[str] | None = None) -> None:
+def fingerprint(doc: Document, profile: DomainProfile, dim: int) -> str:
+    return index_key(
+        doc,
+        profile_name=profile.name,
+        prompt_version=profile.prompt_version,
+        embedding_model=settings.embedding_model,
+        embedding_dim=dim,
+        chunk_size=DEFAULT_CHUNK_SIZE,
+        chunk_overlap=DEFAULT_OVERLAP,
+        contextual=settings.use_contextual,
+    )
+
+
+def main(docs_dir: Path, only: list[str] | None = None, force: bool = False) -> None:
     profile = make_domain(settings)
     docs = profile.load(docs_dir)
     if only:
@@ -69,9 +92,18 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
     conn = store.connect(settings.dsn)
     store.ensure_schema(conn, embedder.dim)
 
+    # Отпечатки читаются до цикла: на архиве закупок это одно чтение вместо
+    # тысячи, а сравнивать всё равно надо каждый документ.
+    known = {} if force else store.index_keys(conn)
+    keys = {doc.doc_id: fingerprint(doc, profile, embedder.dim) for doc in docs}
+    fresh = [doc for doc in docs if known.get(doc.doc_id) != keys[doc.doc_id]]
+    if len(fresh) != len(docs):
+        print(f"Не изменились и пропущены: {len(docs) - len(fresh)}")
+    docs = fresh
+
     total_chunks = 0
     for doc in tqdm(docs, desc="ingest"):
-        store.upsert_document(conn, doc)
+        store.upsert_document(conn, doc, keys[doc.doc_id])
         store.delete_chunks_for_document(conn, doc.doc_id)
 
         for part in doc.parts:
@@ -121,7 +153,12 @@ def main(docs_dir: Path, only: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Использование: python scripts/ingest.py <путь_к_документам> [идентификатор ...]")
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
+        print(
+            "Использование: python scripts/ingest.py [--force] "
+            "<путь_к_документам> [идентификатор ...]"
+        )
         sys.exit(1)
-    main(Path(sys.argv[1]), sys.argv[2:])
+    main(Path(args[0]), args[1:], "--force" in flags)
