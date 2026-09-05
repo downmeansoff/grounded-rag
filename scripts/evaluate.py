@@ -1,7 +1,7 @@
 """Гоняет размеченный набор через retrieval и печатает hit@5, MRR и recall@5.
 
 Использование:
-    python scripts/evaluate.py [--vector|--rerank] <путь_к_output/docs> [eval/labeled.json]
+    python scripts/evaluate.py [--vector|--rerank] [--auto-filter] <путь_к_output/docs> [eval/labeled.json]
 
 Сначала разметка сверяется с документами: фрагмент обязан лежать в том документе,
 за которым записан, и не встречаться в чужих. Не сошлось - прогон падает, а не
@@ -21,6 +21,12 @@
 легче, и общая средняя выросла бы от работы, которой поиск не делал. Рядом
 печатается позиция того же вопроса без фильтра, потому что смысл фильтра
 именно в разнице между этими двумя.
+
+`--auto-filter` включает подстановку заказчика из текста вопроса в фильтр. Тогда
+обычные вопросы идут уже с ним, и общие числа прямо сравнимы с прогоном без
+флага: набор вопросов, индекс и режим поиска те же, отличается одна ступень. У
+вопросов с ручным фильтром рядом печатается, достал ли автофильтр того же
+заказчика: там правильный ответ известен заранее.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from pathlib import Path
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+from grounded_rag.autofilter import auto_filter, common_lexemes, customer_lexemes
 from grounded_rag.config import settings
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
@@ -92,12 +99,13 @@ def totals(rows: list[tuple[bool, float, float]], header: str) -> None:
     )
 
 
-def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
+def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid", auto: bool = False) -> None:
     questions = load_questions(labeled_path)
+    profile = make_domain(settings)
 
     # Разбирает корпус тот же профиль, что его индексировал: разметка привязана
     # к идентификаторам документов, а их выдаёт именно он.
-    problems = check_against_corpus(questions, docs_dir, make_domain(settings))
+    problems = check_against_corpus(questions, docs_dir, profile)
     if problems:
         report(problems, "Разметка не сходится с корпусом:")
 
@@ -124,9 +132,22 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
     plain = [q for q in questions if not q.filters]
     filtered = [q for q in questions if q.filters]
 
+    # Список заказчиков читается один раз на весь прогон: от вопроса к вопросу
+    # он не меняется, а вопросов полсотни.
+    key = profile.filter_key if auto else ""
+    known = customer_lexemes(conn, key) if key else {}
+    common = common_lexemes(conn, known) if key else set()
+    if auto:
+        print(
+            f"Автофильтр включён: заказчик берётся из текста вопроса, ключ {key or 'не задан профилем'}"
+            if key
+            else f'Автофильтр включён, но профиль "{profile.name}" не хранит заказчика в метаданных'
+        )
+
     rows = []
     for question in plain:
-        texts = search(conn, embedder, question, mode, None)
+        pairs, found = auto_filter(conn, question.query, key, None, known, common) if key else ({}, None)
+        texts = search(conn, embedder, question, mode, pairs or None)
         flags = relevance(texts, question.gold)
         row = (
             hit_at_k(flags, K),
@@ -135,9 +156,10 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
         )
         rows.append(row)
         mark = "+" if row[0] else "-"
+        note = "" if not auto else f"   [{found[:40] if found else 'заказчик не опознан'}]"
         print(
             f"{mark} {question.id:<22} {where(flags):<22} "
-            f"recall@{K} {row[2]:.2f}   {question.query}"
+            f"recall@{K} {row[2]:.2f}   {question.query}{note}"
         )
     totals(rows, "")
 
@@ -161,10 +183,22 @@ def main(docs_dir: Path, labeled_path: Path, mode: str = "hybrid") -> None:
         )
         rows.append(row)
         mark = "+" if row[0] else "-"
-        shown = ", ".join(f"{key}={value}" for key, value in pairs.items())
+        shown = ", ".join(f"{name}={value}" for name, value in pairs.items())
+        # Ручной фильтр тут и есть эталон для автофильтра: у этих вопросов
+        # известно, какого заказчика надо было достать из текста.
+        note = ""
+        if key:
+            _, guess = auto_filter(conn, question.query, key, None, known, common)
+            hand = pairs.get(key, "").lower()
+            if guess and hand and hand in guess.lower():
+                note = "   автофильтр: тот же заказчик"
+            elif guess:
+                note = f"   автофильтр: другой заказчик ({guess[:30]})"
+            else:
+                note = "   автофильтр: не опознал"
         print(
             f"{mark} {question.id:<30} без фильтра: {where(without):<22} "
-            f"с фильтром: {where(flags):<14} {shown}"
+            f"с фильтром: {where(flags):<14} {shown}{note}"
         )
     totals(rows, "с фильтром: ")
     conn.close()
@@ -174,8 +208,11 @@ if __name__ == "__main__":
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
-        print("Использование: python scripts/evaluate.py [--vector|--rerank] <docs> [eval/labeled.json]")
+        print(
+            "Использование: python scripts/evaluate.py [--vector|--rerank] [--auto-filter] "
+            "<docs> [eval/labeled.json]"
+        )
         sys.exit(1)
     selected = "vector" if "--vector" in flags else "rerank" if "--rerank" in flags else "hybrid"
     labeled = Path(args[1]) if len(args) > 1 else Path("eval/labeled.json")
-    main(Path(args[0]), labeled, selected)
+    main(Path(args[0]), labeled, selected, "--auto-filter" in flags)

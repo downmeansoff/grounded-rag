@@ -69,6 +69,7 @@ class TendersProfile(DomainProfile):
     entity = "тендер"
     corpus = "тендерной документации"
     prompt_version = "2"
+    filter_key = "Заказчик"
 
     def load(self, docs_dir: Path) -> list[Document]:
         docs = []
