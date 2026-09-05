@@ -1,19 +1,13 @@
 """Гибридный поиск: полнотекст ловит то, что вектор теряет.
 
-Тесты идут в настоящий Postgres, потому что проверяемое поведение живёт
-в SQL: генерируемая колонка tsv, plainto_tsquery('russian', ...) и слияние
-рангов через RRF. Мок вокруг них проверял бы только сам мок.
-
-Изоляция от рабочего корпуса: отдельная схема в незакоммиченной транзакции.
-Откат в конце теста сносит и таблицы, и схему, поэтому боевые 550 чанков
-тесты не видят и не трогают.
+Тесты идут в настоящий Postgres (фикстура conn в conftest.py), потому что
+проверяемое поведение живёт в SQL: генерируемая колонка tsv,
+plainto_tsquery('russian', ...) и слияние рангов через RRF. Мок вокруг них
+проверял бы только сам мок.
 """
 
 from __future__ import annotations
 
-import os
-
-import psycopg
 import pytest
 
 from grounded_rag.config import settings
@@ -29,32 +23,6 @@ def _axis(i: int) -> list[float]:
     vec = [0.0] * DIM
     vec[i] = 1.0
     return vec
-
-
-@pytest.fixture
-def conn():
-    try:
-        connection = store.connect(settings.dsn)
-    except psycopg.OperationalError:
-        # Локально база опциональна: без docker compose эти тесты пропускаются,
-        # остальные идут. В CI пропуск означал бы зелёный прогон, не проверивший
-        # ни одного SQL, поэтому там отсутствие базы переводится в падение.
-        if os.getenv("RAG_REQUIRE_POSTGRES"):
-            raise
-        pytest.skip("Postgres недоступен")
-
-    connection.autocommit = False
-    try:
-        connection.execute("CREATE SCHEMA IF NOT EXISTS rag_test")
-        connection.execute("SET search_path TO rag_test, public")
-        # Подготовка внутри try: упади ensure_schema снаружи, соединение с
-        # незакоммиченным CREATE SCHEMA осталось бы открытым, и следующий тест
-        # висел бы на блокировке схемы вместо того, чтобы показать ошибку.
-        store.ensure_schema(connection, DIM)
-        yield connection
-    finally:
-        connection.rollback()
-        connection.close()
 
 
 def _seed(conn, doc_id: str, chunks: list[tuple[str, list[float]]]) -> None:

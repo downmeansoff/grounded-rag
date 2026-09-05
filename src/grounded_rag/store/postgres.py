@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import psycopg
@@ -213,17 +214,61 @@ class SearchHit:
     rerank_score: float | None = None
 
 
-def search(conn: psycopg.Connection, query_embedding: list[float], k: int = 5) -> list[SearchHit]:
+DOC_ID_KEY = "doc_id"  # зарезервированное имя фильтра: адрес документа, а не его метаданные
+
+
+def _escape_like(value: str) -> str:
+    # Символы % и _ внутри значения фильтра это часть искомой строки, а не
+    # шаблон: "50_000" не должно совпадать с "501000".
+    return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+
+def _meta_condition(filters: Mapping[str, str] | None, params: dict) -> str:
+    """Условие по документу для WHERE, параметры дописываются в params.
+
+    doc_id сравнивается целиком: это идентификатор, подстрока в нём означала бы
+    попадание в чужую закупку. Остальные ключи ищутся в meta подстрокой без учёта
+    регистра: метаданные это человеческие строки ("ГБУК Музей имени ..."), и
+    требовать их точного повторения значит не дать фильтром пользоваться.
+
+    Несколько условий соединяются через AND. Неизвестный ключ не ошибка: meta ->>
+    вернёт NULL, условие не выполнится, выдача будет пустой. Это честнее, чем
+    молча искать по всему корпусу, будто фильтра не было.
+    """
+    if not filters:
+        return ""
+
+    conditions = []
+    for i, (key, value) in enumerate(filters.items()):
+        if key == DOC_ID_KEY:
+            params[f"fv{i}"] = value
+            conditions.append(f"d.doc_id = %(fv{i})s")
+        else:
+            params[f"fk{i}"] = key
+            params[f"fv{i}"] = f"%{_escape_like(value)}%"
+            conditions.append(f"d.meta ->> %(fk{i})s ILIKE %(fv{i})s")
+    return " AND ".join(conditions)
+
+
+def search(
+    conn: psycopg.Connection,
+    query_embedding: list[float],
+    k: int = 5,
+    filters: Mapping[str, str] | None = None,
+) -> list[SearchHit]:
+    params: dict = {"vec": query_embedding, "k": k}
+    condition = _meta_condition(filters, params)
     rows = conn.execute(
-        """
+        f"""
         SELECT c.doc_id, d.title, c.part_name, c.chunk_index, c.text,
-               c.embedding <=> %s::vector AS distance
+               c.embedding <=> %(vec)s::vector AS distance
         FROM chunks c
         JOIN documents d ON d.doc_id = c.doc_id
+        {f"WHERE {condition}" if condition else ""}
         ORDER BY distance
-        LIMIT %s
+        LIMIT %(k)s
         """,
-        (query_embedding, k),
+        params,
     ).fetchall()
     return [SearchHit(*row) for row in rows]
 
@@ -237,6 +282,7 @@ def search_hybrid(
     query_text: str,
     k: int = 5,
     candidates: int = 30,
+    filters: Mapping[str, str] | None = None,
 ) -> list[SearchHit]:
     """Вектор и полнотекст, слитые через RRF.
 
@@ -248,15 +294,31 @@ def search_hybrid(
     Поле distance остаётся настоящим косинусным расстоянием и считается для всех
     отобранных чанков, включая найденные только полнотекстом. Порядок при этом
     задаёт RRF, а не distance.
+
+    Фильтр по документу, если он задан, стоит внутри обоих поисков, а не поверх
+    их слияния. Отсеки мы лишнее после RRF, кандидатов набралось бы 30 по всему
+    корпусу, фильтр вычеркнул бы из них почти всё, и нужный чанк, стоявший в
+    общем списке сороковым, не попал бы в выдачу вовсе.
     """
+    params: dict = {
+        "vec": query_embedding,
+        "query": query_text,
+        "candidates": candidates,
+        "k": k,
+        "rrf": RRF_K,
+    }
+    condition = _meta_condition(filters, params)
+    keep = f"JOIN documents d ON d.doc_id = c.doc_id AND {condition}" if condition else ""
+
     rows = conn.execute(
-        """
+        f"""
         WITH vector_hits AS (
             SELECT id, ROW_NUMBER() OVER (ORDER BY distance) AS rank
             FROM (
-                SELECT id, embedding <=> %(vec)s::vector AS distance
-                FROM chunks
-                ORDER BY embedding <=> %(vec)s::vector
+                SELECT c.id, c.embedding <=> %(vec)s::vector AS distance
+                FROM chunks c
+                {keep}
+                ORDER BY c.embedding <=> %(vec)s::vector
                 LIMIT %(candidates)s
             ) v
         ),
@@ -264,7 +326,9 @@ def search_hybrid(
             SELECT id, ROW_NUMBER() OVER (ORDER BY rank_score DESC) AS rank
             FROM (
                 SELECT c.id, ts_rank_cd(c.tsv, q) AS rank_score
-                FROM chunks c, plainto_tsquery('russian', %(query)s) q
+                FROM chunks c
+                {keep}
+                CROSS JOIN plainto_tsquery('russian', %(query)s) q
                 WHERE c.tsv @@ q
                 ORDER BY ts_rank_cd(c.tsv, q) DESC
                 LIMIT %(candidates)s
@@ -288,12 +352,6 @@ def search_hybrid(
         JOIN documents d ON d.doc_id = c.doc_id
         ORDER BY f.score DESC
         """,
-        {
-            "vec": query_embedding,
-            "query": query_text,
-            "candidates": candidates,
-            "k": k,
-            "rrf": RRF_K,
-        },
+        params,
     ).fetchall()
     return [SearchHit(*row) for row in rows]
