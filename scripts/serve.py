@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -59,6 +60,19 @@ class Engine:
 
     def documents(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    def chunks_of(self, doc_id: str) -> int:
+        """Сколько чанков у документа. Ноль означает «не индексировали».
+
+        Нужно спрашивающей программе, чтобы отличить «в документе нет ответа»
+        от «документ ещё не в индексе»: выдача в обоих случаях пустая, а делать
+        человеку надо разное.
+        """
+        with _lock:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE doc_id = %s", (doc_id,)
+            ).fetchone()
+        return row[0] if row else 0
 
     def search(self, question: str, filters: dict[str, str] | None, k: int) -> list[dict]:
         # Соединение одно на службу, а запросы могут прийти одновременно:
@@ -98,7 +112,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - имя задаёт http.server
         global _last_request
         _last_request = time.monotonic()
-        if self.path.rstrip("/") != "/health":
+        path, _, query = self.path.partition("?")
+        if path.rstrip("/") == "/document":
+            doc_id = parse_qs(query).get("doc_id", [""])[0]
+            if not doc_id:
+                self._send(400, {"error": "не задан doc_id"})
+                return
+            chunks = self.engine.chunks_of(doc_id)
+            self._send(200, {"doc_id": doc_id, "indexed": chunks > 0, "chunks": chunks})
+            return
+
+        if path.rstrip("/") != "/health":
             self._send(404, {"error": "нет такого маршрута"})
             return
         self._send(200, {"ok": True, "documents": self.engine.documents()})
