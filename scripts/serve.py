@@ -48,9 +48,14 @@ class Engine:
     """Модель, профиль и соединение с базой, живущие всё время работы службы."""
 
     def __init__(self) -> None:
+        # База первой, модель второй. Порядок не косметический: модель грузится
+        # полминуты, а база или отвечает сразу, или не отвечает вовсе. При
+        # обратном порядке отказ «нет базы» приходит через сорок секунд вместо
+        # пяти, и всё это время программа, которая подняла службу, не может
+        # сказать человеку, что достаточно запустить Docker.
         self.profile = make_domain(settings)
-        self.embedder = make_embedder(settings)
         self.conn = store.connect(settings.dsn)
+        self.embedder = make_embedder(settings)
 
     def documents(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]

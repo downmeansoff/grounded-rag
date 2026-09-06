@@ -10,8 +10,19 @@ from psycopg.types.json import Json
 from grounded_rag.domain.base import Document
 from grounded_rag.errors import DimensionMismatch, SchemaOutdated
 
+CONNECT_TIMEOUT = 5
+
 
 def connect(dsn: str) -> psycopg.Connection:
+    """Соединение с базой. Ждёт её не дольше CONNECT_TIMEOUT секунд.
+
+    Предел нужен, потому что по умолчанию его нет: с остановленной базой
+    psycopg ждёт молча минутами, и программа, которая держит движок службой,
+    всё это время не может сказать человеку, что достаточно запустить Docker.
+    Значение из строки подключения сильнее, если его задали явно.
+    """
+    if "connect_timeout" not in dsn:
+        dsn = f"{dsn}{'&' if '?' in dsn else '?'}connect_timeout={CONNECT_TIMEOUT}"
     conn = psycopg.connect(dsn, autocommit=True)
     conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     register_vector(conn)
