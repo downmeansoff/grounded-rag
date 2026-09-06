@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from grounded_rag import retrieve
+from grounded_rag.config import settings as default_settings
 from grounded_rag.rerank.cross_encoder import Reranker
 from grounded_rag.store.postgres import SearchHit
 
@@ -75,3 +77,25 @@ def test_distance_survives_rerank_untouched():
 
 def test_search_hit_without_rerank_has_no_score():
     assert _hit("а").rerank_score is None
+
+
+def test_warm_loads_the_model_before_the_first_question(monkeypatch):
+    """Служба греет rerank заранее: иначе секунду загрузки платит первый спросивший."""
+    loaded: list[str] = []
+    monkeypatch.setattr(retrieve, "_reranker", None)
+    monkeypatch.setattr(retrieve, "Reranker", lambda name: loaded.append(name) or object())
+
+    retrieve.warm(default_settings.model_copy(update={"use_rerank": True}))
+
+    assert loaded, "модель rerank должна загрузиться при прогреве"
+
+
+def test_warm_stays_out_of_the_way_when_rerank_is_off(monkeypatch):
+    """Выключенный rerank значит выключенный: грузить гигабайт незачем."""
+    loaded: list[str] = []
+    monkeypatch.setattr(retrieve, "_reranker", None)
+    monkeypatch.setattr(retrieve, "Reranker", lambda name: loaded.append(name) or object())
+
+    retrieve.warm(default_settings.model_copy(update={"use_rerank": False}))
+
+    assert loaded == []

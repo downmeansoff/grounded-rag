@@ -44,6 +44,22 @@ def _get_reranker(config: Settings) -> Reranker:
     return _reranker
 
 
+def warm(config: Settings | None = None) -> None:
+    """Загружает модель rerank заранее, до первого вопроса.
+
+    Ленивая загрузка правильна для скриптов: прогон, которому rerank не нужен,
+    не должен за него платить. Но у службы, которая живёт часами, она даёт
+    ровно один медленный запрос, и достаётся он первому спросившему. Замер на
+    поднятой службе: первый вопрос 1.12 с, следующие 0.04 с.
+
+    Секунда сама по себе немного, но она приходит там, где человек только что
+    ждал полминуты загрузки службы и уже готов решить, что поиск подвисает.
+    """
+    config = config or default_settings
+    if config.use_rerank:
+        _get_reranker(config)
+
+
 def retrieve(
     conn: psycopg.Connection,
     query_embedding: list[float],

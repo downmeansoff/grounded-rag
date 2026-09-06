@@ -36,7 +36,7 @@ import psycopg
 from grounded_rag.config import settings
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
-from grounded_rag.retrieve import retrieve
+from grounded_rag.retrieve import retrieve, warm
 from grounded_rag.store import postgres as store
 
 DEFAULT_PORT = 8799
@@ -59,6 +59,14 @@ class Engine:
         self.profile = make_domain(settings)
         self.conn = store.connect(settings.dsn)
         self.embedder = make_embedder(settings)
+        # Первый прогон через модель всегда дороже следующих: замер на живой
+        # службе дал 1.12 с против 0.03 с на embed_query. Секунда сама по себе
+        # немного, но приходит она сразу после получаса ожидания загрузки, и
+        # человек к этому моменту уже готов решить, что поиск подвисает.
+        self.embedder.embed_query("прогрев")
+        # То же самое, но для rerank, который грузится лениво и стоит на первом
+        # вызове дюжину секунд. Когда USE_RERANK выключен, ничего не делает.
+        warm(settings)
 
     def retrying(self, work):
         """Работа с базой, переживающая обрыв соединения: одна повторная попытка.
