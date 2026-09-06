@@ -31,6 +31,8 @@ from urllib.parse import parse_qs
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+import psycopg
+
 from grounded_rag.config import settings
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
@@ -58,8 +60,31 @@ class Engine:
         self.conn = store.connect(settings.dsn)
         self.embedder = make_embedder(settings)
 
+    def retrying(self, work):
+        """Работа с базой, переживающая обрыв соединения: одна повторная попытка.
+
+        Соединение открывается один раз и живёт часами, а Postgres под ним
+        может уехать: контейнер перезапустили, Docker Desktop подвис, машина
+        уснула. Так и случилось при первом же долгом прогоне, и служба после
+        этого осталась жива, но на каждый запрос отвечала «the connection is
+        closed» до самого выключения по простою. Человек в окне видел поломку
+        поиска там, где достаточно переподключиться.
+        """
+        try:
+            return work()
+        except psycopg.OperationalError:
+            try:
+                self.conn.close()
+            except Exception:  # соединение и так мертво, закрывать нечего
+                pass
+            self.conn = store.connect(settings.dsn)
+            return work()
+
     def documents(self) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        with _lock:
+            return self.retrying(
+                lambda: self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            )
 
     def chunks_of(self, doc_id: str) -> int:
         """Сколько чанков у документа. Ноль означает «не индексировали».
@@ -69,9 +94,11 @@ class Engine:
         человеку надо разное.
         """
         with _lock:
-            row = self.conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE doc_id = %s", (doc_id,)
-            ).fetchone()
+            row = self.retrying(
+                lambda: self.conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE doc_id = %s", (doc_id,)
+                ).fetchone()
+            )
         return row[0] if row else 0
 
     def search(self, question: str, filters: dict[str, str] | None, k: int) -> list[dict]:
@@ -79,7 +106,9 @@ class Engine:
         # psycopg не обещает потокобезопасности на одном соединении.
         with _lock:
             vector = self.embedder.embed_query(question)
-            hits = retrieve(self.conn, vector, question, k=k, filters=filters or None)
+            hits = self.retrying(
+                lambda: retrieve(self.conn, vector, question, k=k, filters=filters or None)
+            )
         return [
             {
                 "doc_id": hit.doc_id,
