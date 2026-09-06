@@ -45,6 +45,26 @@ def enrich(context: str, text: str) -> str:
     return f"{context}\n\n{text}" if context else text
 
 
+def unpaid_chunks(cache, texts_by_doc: dict[str, list[tuple[str, str]]], profile) -> int:
+    """Сколько чанков придётся отдать модели, то есть сколько это стоит.
+
+    Считается до первого вызова и без сети: ключ кэша детерминированный, и
+    достаточно спросить, лежит ли по нему готовый контекст.
+
+    Нужно, чтобы прогон мог предупредить о расходе заранее. Внутри цикла это
+    уже поздно: к моменту, когда кто-то заметит счёт, деньги потрачены.
+    """
+    if cache is None:
+        return sum(len(items) for items in texts_by_doc.values())
+    unpaid = 0
+    for doc_id, items in texts_by_doc.items():
+        for part_name, text in items:
+            key = cache_key(profile.prompt_version, doc_id, part_name, text)
+            if cache.get(key) is None:
+                unpaid += 1
+    return unpaid
+
+
 class Contextualizer:
     def __init__(
         self,

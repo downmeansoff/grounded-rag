@@ -236,3 +236,29 @@ def test_contextual_chunks_counts_only_enriched(conn) -> None:
 
     store.insert_chunk(conn, "0001", "часть", 1, "текст", vec, context="Раздел про гардероб")
     assert store.contextual_chunks(conn) == 1
+
+
+def test_cost_is_counted_before_the_first_call(tmp_path) -> None:
+    """Расход считается до прогона, а не по факту.
+
+    Внутри цикла предупреждать поздно: к моменту, когда счёт заметят, деньги
+    потрачены. Проверено на себе, замером на тысяче сгенерированных
+    документов: полторы тысячи вызовов ушло прежде, чем это стало заметно.
+    """
+    from grounded_rag.contextual.contextualizer import unpaid_chunks
+
+    cache = ContextCache(tmp_path / "contexts.json")
+    planned = {"0001": [("часть", "первый кусок"), ("часть", "второй кусок")]}
+
+    assert unpaid_chunks(cache, planned, PROFILE) == 2
+
+    cache.set(cache_key(PROFILE.prompt_version, "0001", "часть", "первый кусок"), "контекст")
+    assert unpaid_chunks(cache, planned, PROFILE) == 1
+
+
+def test_without_a_cache_everything_is_unpaid() -> None:
+    from grounded_rag.contextual.contextualizer import unpaid_chunks
+
+    planned = {"0001": [("часть", "кусок")], "0002": [("часть", "другой")]}
+
+    assert unpaid_chunks(None, planned, PROFILE) == 2

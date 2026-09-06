@@ -34,13 +34,18 @@ from tqdm import tqdm
 
 from grounded_rag.chunk.recursive import DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP, chunk_text
 from grounded_rag.config import settings
-from grounded_rag.contextual.contextualizer import Contextualizer, enrich
+from grounded_rag.contextual.contextualizer import Contextualizer, enrich, unpaid_chunks
 from grounded_rag.domain.base import Document, DomainProfile
 from grounded_rag.domain.factory import make_domain
 from grounded_rag.embed.factory import make_embedder
 from grounded_rag.index_key import index_key
 from grounded_rag.llm import GigaChatModel
 from grounded_rag.store import postgres as store
+
+# Сколько платных вызовов модели прогон делает молча. Порог, а не запрет:
+# обогатить десяток новых закупок это обычная работа, а полторы тысячи
+# чанков это уже счёт, который стоит увидеть до, а не после.
+DEFAULT_MAX_CALLS = 200
 
 
 def build_contextualizer(profile: DomainProfile) -> Contextualizer | None:
@@ -81,6 +86,7 @@ def main(
     only: list[str] | None = None,
     force: bool = False,
     drop_contexts: bool = False,
+    max_calls: int = DEFAULT_MAX_CALLS,
 ) -> None:
     profile = make_domain(settings)
     docs = profile.load(docs_dir)
@@ -122,6 +128,28 @@ def main(
     if len(fresh) != len(docs):
         print(f"Не изменились и пропущены: {len(docs) - len(fresh)}")
     docs = fresh
+
+    # Сколько чанков придётся отдать модели, посчитано до первого вызова.
+    # Внутри цикла предупреждать поздно: к моменту, когда счёт заметят, деньги
+    # уже потрачены. Проверено на себе, замером на тысяче сгенерированных
+    # документов: полторы тысячи вызовов ушло прежде, чем это стало заметно.
+    if contextualizer is not None and docs:
+        planned = {
+            doc.doc_id: [(part.name, chunk.text) for part in doc.parts for chunk in chunk_text(part.text)]
+            for doc in docs
+        }
+        unpaid = unpaid_chunks(contextualizer.cache, planned, profile)
+        if unpaid > max_calls:
+            conn.close()
+            print(
+                f"Контекст придётся сгенерировать для {unpaid} чанков, и это платные вызовы "
+                f"модели. Порог {max_calls} задан затем, чтобы случайный прогон по большому "
+                f"корпусу не потратил тариф молча. Если расход намеренный, повторите с "
+                f"--max-calls {unpaid}; если контекст не нужен, поставьте USE_CONTEXTUAL=false."
+            )
+            sys.exit(1)
+        if unpaid:
+            print(f"Новых контекстов будет сгенерировано: {unpaid}, остальное из кэша")
 
     total_chunks = 0
     for doc in tqdm(docs, desc="ingest"):
@@ -180,7 +208,17 @@ if __name__ == "__main__":
     if not args:
         print(
             "Использование: python scripts/ingest.py [--force] [--drop-contexts] "
-            "<путь_к_документам> [идентификатор ...]"
+            "[--max-calls N] <путь_к_документам> [идентификатор ...]"
         )
         sys.exit(1)
-    main(Path(args[0]), args[1:], "--force" in flags, "--drop-contexts" in flags)
+    limit = DEFAULT_MAX_CALLS
+    for flag in flags:
+        if flag.startswith("--max-calls"):
+            _, _, value = flag.partition("=")
+            limit = int(value) if value.isdigit() else limit
+    if "--max-calls" in sys.argv:
+        position = sys.argv.index("--max-calls")
+        if position + 1 < len(sys.argv) and sys.argv[position + 1].isdigit():
+            limit = int(sys.argv[position + 1])
+            args = [a for a in args if a != sys.argv[position + 1]]
+    main(Path(args[0]), args[1:], "--force" in flags, "--drop-contexts" in flags, limit)
