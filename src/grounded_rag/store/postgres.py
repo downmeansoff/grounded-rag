@@ -193,6 +193,18 @@ def meta_by_document(conn: psycopg.Connection, key: str) -> dict[str, str]:
     return {doc_id: value for doc_id, value in rows}
 
 
+def contextual_chunks(conn: psycopg.Connection) -> int:
+    """Сколько чанков в индексе собрано с контекстом.
+
+    Нужно ровно для одной проверки: индексация с выключенным Contextual
+    Retrieval поверх индекса, собранного с ним, тихо выбрасывает контексты и
+    ухудшает поиск, ничего об этом не сказав.
+    """
+    if not _table_exists(conn, "chunks"):
+        return 0
+    return conn.execute("SELECT COUNT(*) FROM chunks WHERE COALESCE(context, '') <> ''").fetchone()[0]
+
+
 def delete_chunks_for_document(conn: psycopg.Connection, doc_id: str) -> None:
     conn.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
 

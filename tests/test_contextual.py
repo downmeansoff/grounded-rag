@@ -214,3 +214,25 @@ def test_cache_still_works_after_quota_ran_out(tmp_path):
 
     assert after.context_for(DOC, "Описание объекта закупки", CHUNK) == "Раздел про порядок оплаты."
     assert after.skipped == 0
+
+
+def test_contextual_chunks_counts_only_enriched(conn) -> None:
+    """Счётчик нужен ровно одной проверке: не выбрасывает ли прогон контексты.
+
+    Индексация с выключенным Contextual Retrieval поверх индекса, собранного с
+    ним, тихо пересчитывает эмбеддинги без описаний чанков и роняет поиск.
+    Заметить это по выдаче нельзя, поэтому ingest сверяется с этим числом.
+    """
+    from grounded_rag.config import settings
+    from grounded_rag.store import postgres as store
+
+    store.upsert_document(
+        conn,
+        Document(doc_id="0001", title="Тендер", source_path="/tmp/0001.txt", meta={}),
+    )
+    vec = [0.0] * settings.embedding_dim
+    store.insert_chunk(conn, "0001", "часть", 0, "текст без контекста", vec)
+    assert store.contextual_chunks(conn) == 0
+
+    store.insert_chunk(conn, "0001", "часть", 1, "текст", vec, context="Раздел про гардероб")
+    assert store.contextual_chunks(conn) == 1

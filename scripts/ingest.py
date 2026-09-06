@@ -76,7 +76,12 @@ def fingerprint(doc: Document, profile: DomainProfile, dim: int) -> str:
     )
 
 
-def main(docs_dir: Path, only: list[str] | None = None, force: bool = False) -> None:
+def main(
+    docs_dir: Path,
+    only: list[str] | None = None,
+    force: bool = False,
+    drop_contexts: bool = False,
+) -> None:
     profile = make_domain(settings)
     docs = profile.load(docs_dir)
     if only:
@@ -91,6 +96,23 @@ def main(docs_dir: Path, only: list[str] | None = None, force: bool = False) -> 
 
     conn = store.connect(settings.dsn)
     store.ensure_schema(conn, embedder.dim)
+
+    # Индексация без контекста поверх индекса, собранного с контекстом, тихо
+    # выбрасывает описания чанков и роняет поиск: эмбеддинги считаются заново,
+    # уже без них. Заметить это по выдаче нельзя, поэтому прогон обрывается.
+    # Контексты при этом никуда не деваются, они лежат в кэше, и включение
+    # USE_CONTEXTUAL обратно ничего не стоит.
+    if not settings.use_contextual and not drop_contexts:
+        enriched = store.contextual_chunks(conn)
+        if enriched:
+            conn.close()
+            print(
+                f"В индексе {enriched} чанков собраны с Contextual Retrieval, а сейчас "
+                f"USE_CONTEXTUAL=false: этот прогон перезапишет их без контекста и ухудшит "
+                f"поиск. Верните USE_CONTEXTUAL=true (контексты лежат в кэше, повторная "
+                f"генерация ничего не стоит) либо подтвердите потерю флагом --drop-contexts."
+            )
+            sys.exit(1)
 
     # Отпечатки читаются до цикла: на архиве закупок это одно чтение вместо
     # тысячи, а сравнивать всё равно надо каждый документ.
@@ -157,8 +179,8 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         print(
-            "Использование: python scripts/ingest.py [--force] "
+            "Использование: python scripts/ingest.py [--force] [--drop-contexts] "
             "<путь_к_документам> [идентификатор ...]"
         )
         sys.exit(1)
-    main(Path(args[0]), args[1:], "--force" in flags)
+    main(Path(args[0]), args[1:], "--force" in flags, "--drop-contexts" in flags)
